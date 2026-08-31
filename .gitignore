@@ -1,6 +1,7 @@
 .tmp
-.md
+*.md
 __pycache__/
 *.py[cod]
 .venv/
-.env
+*.env
+*.Identifier
