@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 *.env
 *.Identifier
+py_service/models/
+*.egg-info/
+*.pdf
+*.png
