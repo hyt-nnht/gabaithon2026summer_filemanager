@@ -1,5 +1,7 @@
 .tmp
 *.md
+!py_service/README.md
+!py_service/機能説明書.md
 __pycache__/
 *.py[cod]
 .venv/
