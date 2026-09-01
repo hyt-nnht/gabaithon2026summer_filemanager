@@ -11,3 +11,5 @@ py_service/models/
 *.egg-info/
 *.pdf
 *.png
+.vs
+.vs/
