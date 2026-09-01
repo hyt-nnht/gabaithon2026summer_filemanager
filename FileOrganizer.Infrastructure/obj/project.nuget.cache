@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "LrjQumCZ4yI=",
+  "success": true,
+  "projectFilePath": "C:\\hackthon\\gabaithon_2026summer\\gabaithon2026summer_filemanager\\FileOrganizer.Infrastructure\\FileOrganizer.Infrastructure.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\nakamurahayato\\.nuget\\packages\\microsoft.windows.sdk.net.ref\\10.0.19041.57\\microsoft.windows.sdk.net.ref.10.0.19041.57.nupkg.sha512"
+  ],
+  "logs": []
+}
