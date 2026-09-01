@@ -13,3 +13,5 @@ py_service/models/
 *.png
 .vs
 .vs/
+bin/
+obj/
