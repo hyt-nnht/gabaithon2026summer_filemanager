@@ -11,11 +11,20 @@ from .classifiers.slm import LlamaCppSlmClassifier
 from .config import Settings
 from .errors import AnalysisError, SlmError
 from .extractors.router import TextExtractionRouter
-from .models import ClassificationCandidate, FinalDecision, WarningItem
+from .models import ClassificationCandidate, ExtractionResult, FinalDecision, WarningItem
 from .naming import suggest_base_name
+from .text import normalize_text
 
 
 class AnalysisCoordinator:
+    EXPLICIT_TYPE_KEYWORDS = {
+        "receipt": ("領収書", "領収証"),
+        "invoice": ("請求書",),
+        "meeting_minutes": ("議事録",),
+        "contract": ("契約書",),
+        "other": (),
+    }
+
     def __init__(
         self,
         settings: Settings,
@@ -37,11 +46,22 @@ class AnalysisCoordinator:
         expected_size: int | None,
         expected_last_write_utc: datetime | None,
         analysis_mode: Literal["rules_only", "slm_with_rules_fallback"],
+        provided_ocr_text: str | None = None,
     ) -> dict[str, Any]:
         started = perf_counter()
         path = self._validate_file(file_path, expected_size, expected_last_write_utc)
         with self._analysis_lock:
-            extraction = self.extraction_router.extract(path)
+            normalized_ocr_text = normalize_text(provided_ocr_text) if provided_ocr_text is not None else ""
+            if normalized_ocr_text:
+                extraction = ExtractionResult(
+                    text=normalized_ocr_text,
+                    source="provided_ocr_text",
+                    confidence=None,
+                    page_count=None,
+                    elapsed_ms=0,
+                )
+            else:
+                extraction = self.extraction_router.extract(path)
             baseline = self.rules.classify(extraction.text, path.name)
             ai_suggestion: ClassificationCandidate | None = None
             warnings = list(extraction.warnings)
@@ -76,6 +96,19 @@ class AnalysisCoordinator:
         ai_suggestion: ClassificationCandidate | None,
     ) -> FinalDecision:
         if ai_suggestion is None:
+            return FinalDecision(
+                decision_source="rules",
+                document_type=baseline.document_type,
+                organization=baseline.organization,
+                document_date=baseline.document_date,
+                destination_key=baseline.document_type,
+            )
+        explicit_keywords = AnalysisCoordinator.EXPLICIT_TYPE_KEYWORDS[baseline.document_type]
+        if (
+            ai_suggestion.document_type != baseline.document_type
+            and baseline.reason is not None
+            and any(keyword in baseline.reason for keyword in explicit_keywords)
+        ):
             return FinalDecision(
                 decision_source="rules",
                 document_type=baseline.document_type,

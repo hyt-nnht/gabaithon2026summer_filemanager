@@ -6,7 +6,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-class AnalyzeRequest(BaseModel):
+class DetailedAnalyzeRequest(BaseModel):
+    """Python diagnostics endpoint request retained for local debugging."""
+
     model_config = ConfigDict(extra="forbid")
 
     schema_version: Literal["1.0"] = "1.0"
@@ -18,9 +20,27 @@ class AnalyzeRequest(BaseModel):
     language: Literal["ja", "en"] = "ja"
 
 
+class AnalyzeRequest(BaseModel):
+    """C# FileOrganizer.Shared.Models.AnalyzeRequest compatible request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_path: str = Field(min_length=1)
+    ocr_text: str | None = None
+    extract_fields: list[str]
+
+
+class AnalyzeResponse(BaseModel):
+    """C# FileOrganizer.Shared.Models.AnalyzeResponse compatible response."""
+
+    success: bool
+    category: str | None = None
+    metadata: dict[str, str] | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+
+
 class WarmupResponse(BaseModel):
     ocr_ready: bool
     slm_ready: bool
     elapsed_ms: int
     warnings: list[dict[str, str]]
-
