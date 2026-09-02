@@ -7,17 +7,23 @@
 # system codepage, and non-ASCII comments can get mangled into a parser error.
 #
 # Parameters:
-#   -Port          Port number to print (default 55123)
-#   -DelaySeconds  Delay before printing the PORT line, for the timeout test case (default 0)
-#   -SuppressPort  When set, never prints the PORT line, for the timeout test case
-#   -ExitCode      When set (>= 0), exits immediately with this code before printing PORT,
-#                  for the early-exit-before-handshake test case
+#   -Port                    Port number to print (default 55123)
+#   -DelaySeconds            Delay before printing the PORT line, for the timeout test case (default 0)
+#   -SuppressPort            When set, never prints the PORT line, for the timeout test case
+#   -ExitCode                When set (>= 0), exits immediately with this code before printing PORT,
+#                            for the early-exit-before-handshake test case
+#   -CrashAfterHandshakeMs   When set (>= 0), sleeps this long AFTER printing the PORT line, then exits
+#                            with -CrashExitCode. Simulates an OOM-style crash of an already-running
+#                            service, for the post-handshake crash-detection / respawn test cases.
+#   -CrashExitCode           Exit code used for the -CrashAfterHandshakeMs case (default 1)
 
 param(
     [int]$Port = 55123,
     [int]$DelaySeconds = 0,
     [switch]$SuppressPort,
-    [int]$ExitCode = -1
+    [int]$ExitCode = -1,
+    [int]$CrashAfterHandshakeMs = -1,
+    [int]$CrashExitCode = 1
 )
 
 if ($ExitCode -ge 0) {
@@ -37,6 +43,12 @@ if ($DelaySeconds -gt 0) {
 if (-not $SuppressPort) {
     Write-Output "PORT: $Port"
     [Console]::Out.Flush()
+}
+
+if ($CrashAfterHandshakeMs -ge 0) {
+    Start-Sleep -Milliseconds $CrashAfterHandshakeMs
+    [Console]::Error.WriteLine("mock_py_service: simulating post-handshake crash with code $CrashExitCode")
+    exit $CrashExitCode
 }
 
 # Stay resident until killed via the Job Object, mimicking the real uvicorn process.
