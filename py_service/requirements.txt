@@ -1,3 +1,5 @@
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
 # Core API and text-PDF extraction
 fastapi>=0.115,<1
 pydantic>=2.9,<3
