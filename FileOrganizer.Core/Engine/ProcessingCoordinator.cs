@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FileOrganizer.Core.Utils;
@@ -53,12 +54,25 @@ public sealed class ProcessingCompletedEventArgs : EventArgs
 /// 元のパスのまま後続アクションへ継続する。
 /// </para>
 /// <para>
-/// <b>OCR/AI連携（Phase2）</b>: <see cref="IOcrService"/>・<see cref="IPythonApiClient"/>は
-/// コンストラクタで受け取り呼び出し口（<see cref="EnrichWithAiMetadataIfNeededAsync"/>）を
-/// 用意するのみで、実際の呼び出しはPhase2で実装する（<see cref="RuleEvaluator"/>側も
-/// <c>ocr_contains</c>/<c>ai_category</c>条件は<see cref="FileMetadata.OcrText"/>/
-/// <see cref="FileMetadata.AiCategory"/>が未設定の間は常に不一致として扱う設計のため、
-/// 現時点で呼び出さなくてもルール評価の正しさに影響しない）。
+/// <b>OCR/AI連携（Phase2）</b>: 対象ルール群（<c>settings.LoadRulesAsync</c>で読み込んだ全ルール）の
+/// いずれかが<c>ocr_contains</c>または<c>ai_category</c>条件を持つ場合に限り、ルール評価（<see cref="RuleEvaluator"/>）
+/// の前に<see cref="EnrichWithAiMetadataAsync"/>で
+/// 2-1 <c>PdfToBitmapRenderer</c> → 2-2 <c>WindowsMediaOcrService</c>（いずれも<see cref="IOcrService"/>実装内部）
+/// でOCR全文を抽出し、0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>でカテゴリ・メタデータを取得する。
+/// 取得した<see cref="FileMetadata.OcrText"/>/<see cref="FileMetadata.AiCategory"/>を反映した上で
+/// <see cref="RuleEvaluator"/>を評価するため、これらの条件を持つルールも正しく判定できる。
+/// 該当条件を持つルールが1件も無い場合はOCR/HTTP呼び出しのコストを避けるため一切呼び出さない
+/// （Phase1と同じ挙動）。
+/// </para>
+/// <para>
+/// <b>フォールバック（仕様書§3.1「コンテンツ解析自動リネーム」）</b>: OCR言語パック未インストール・
+/// OCR抽出失敗・Python API呼び出し失敗は、いずれも例外を投げず該当ステップのみをスキップして
+/// ルールベース仕分けへgracefulに退避する（<see cref="EnrichWithAiMetadataAsync"/>参照）。
+/// </para>
+/// <para>
+/// <b>プライバシー（仕様書§7.2-6）</b>: OCR抽出テキスト全文は<see cref="FileMetadata.OcrText"/>
+/// （呼び出し元が用意したローカルインスタンス）とPython連携用の一時リクエストにのみ乗り、
+/// <see cref="HistoryRecord"/>を含むDB書き込み・ログ出力の経路には一切渡さない。
 /// </para>
 /// </remarks>
 public sealed class ProcessingCoordinator
@@ -78,8 +92,13 @@ public sealed class ProcessingCoordinator
     /// <param name="historyRepository">1-3 2フェーズ状態管理リポジトリ（<see cref="Database.SqliteHistoryRepository"/>）。</param>
     /// <param name="fileOperationService">1-8 実ファイル操作サービス（<see cref="Services.FileOperationService"/>）。</param>
     /// <param name="settingsRepository">ルール一覧・<c>ApplyAllMatchingRules</c>設定の取得元。</param>
-    /// <param name="ocrService">Phase2向けOCR抽出の呼び出し口。現時点では未使用（省略可）。</param>
-    /// <param name="pythonApiClient">Phase2向けAI/SLM解析の呼び出し口。現時点では未使用（省略可）。</param>
+    /// <param name="ocrService">
+    /// 2-1/2-2 OCR抽出の呼び出し口（<c>WindowsMediaOcrService</c>等）。<c>null</c>の場合、
+    /// <c>ocr_contains</c>/<c>ai_category</c>ルールが存在してもAI解析は行わずルールベースのみで動作する。
+    /// </param>
+    /// <param name="pythonApiClient">
+    /// 0-4 AI/SLM解析の呼び出し口（<c>PythonApiClient</c>）。<c>null</c>の場合は上記同様AI解析を行わない。
+    /// </param>
     /// <param name="defaultConflictPolicy">
     /// Move/Copyアクション実行時の同名衝突ポリシー（<c>RuleAction</c>自体は保持しないため、
     /// <c>AppSettings</c>相当のサービス既定値として渡す）。既定は<see cref="ConflictPolicy.AutoRename"/>。
@@ -149,11 +168,15 @@ public sealed class ProcessingCoordinator
             return empty;
         }
 
-        // Phase2拡張ポイント（OCR/AI解析）: 呼び出し口のみ用意し、現時点では実際には呼び出さない。
-        await EnrichWithAiMetadataIfNeededAsync(metadata, ct).ConfigureAwait(false);
-
         AppSettings settings = await _settingsRepository.LoadSettingsAsync(ct).ConfigureAwait(false);
         List<RuleModel> rules = await _settingsRepository.LoadRulesAsync(ct).ConfigureAwait(false);
+
+        // Phase2: ocr_contains/ai_category条件を持つ有効ルールが1件でもある場合のみ、
+        // OCR→AI解析パイプラインを実行してmetadata.OcrText/AiCategoryを埋める。
+        // 対象ルールが無ければコスト（OCR処理・HTTP通信）を避けるため一切呼び出さない（Phase1同様の挙動）。
+        AnalyzeResponse? analyzeResponse = RequiresAiEnrichment(rules)
+            ? await EnrichWithAiMetadataAsync(metadata, ct).ConfigureAwait(false)
+            : null;
 
         RuleEvaluationResult evaluation = _ruleEngine.Evaluate(metadata, rules, settings.ApplyAllMatchingRules);
         if (!evaluation.IsMatched)
@@ -176,7 +199,7 @@ public sealed class ProcessingCoordinator
             {
                 ct.ThrowIfCancellationRequested();
 
-                ActionOutcome outcome = await ExecuteActionAsync(currentPath, action, ct).ConfigureAwait(false);
+                ActionOutcome outcome = await ExecuteActionAsync(currentPath, action, analyzeResponse, ct).ConfigureAwait(false);
                 if (outcome.Record != null)
                 {
                     records.Add(outcome.Record);
@@ -199,7 +222,7 @@ public sealed class ProcessingCoordinator
 
     private readonly record struct ActionOutcome(HistoryRecord? Record, string NextPath, bool StopChain);
 
-    private async Task<ActionOutcome> ExecuteActionAsync(string currentPath, RuleAction action, CancellationToken ct)
+    private async Task<ActionOutcome> ExecuteActionAsync(string currentPath, RuleAction action, AnalyzeResponse? analyzeResponse, CancellationToken ct)
     {
         if (!TryMapOperationType(action.Type, out OperationType opType))
         {
@@ -220,7 +243,9 @@ public sealed class ProcessingCoordinator
         {
             OpType = opType,
             SourcePath = currentPath,
-            DestinationPath = BuildIntendedDestinationPath(currentPath, action, opType),
+            // DestinationPath（Planned時点の見込み）にもAI解析結果によるプレースホルダー展開を反映する。
+            // HistoryRecordにOCR全文自体は含まれない点に注意（仕様書§7.2-6）。
+            DestinationPath = BuildIntendedDestinationPath(currentPath, action, opType, analyzeResponse),
             FileSizeBytes = fileInfo.Length,
             FileLastModifiedUtc = fileInfo.LastWriteTimeUtc,
             LightweightHash = lightweightHash,
@@ -238,7 +263,7 @@ public sealed class ProcessingCoordinator
         try
         {
             // 1-8: 実ファイル操作。
-            opResult = await ExecuteFileOperationAsync(currentPath, action, opType, ct).ConfigureAwait(false);
+            opResult = await ExecuteFileOperationAsync(currentPath, action, opType, analyzeResponse, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -283,15 +308,19 @@ public sealed class ProcessingCoordinator
         return new ActionOutcome(record, currentPath, StopChain: true);
     }
 
-    private Task<OperationResult> ExecuteFileOperationAsync(string currentPath, RuleAction action, OperationType opType, CancellationToken ct)
+    private Task<OperationResult> ExecuteFileOperationAsync(
+        string currentPath, RuleAction action, OperationType opType, AnalyzeResponse? analyzeResponse, CancellationToken ct)
     {
         return opType switch
         {
             OperationType.Move => _fileOperationService.MoveAsync(currentPath, RequireDestination(action), _defaultConflictPolicy, ct),
             OperationType.Copy => _fileOperationService.CopyAsync(currentPath, RequireDestination(action), _defaultConflictPolicy, ct),
-            // Phase1時点ではPattern（テンプレート文字列）をそのまま新ファイル名として使用する。
-            // 日付・会社名等のプレースホルダー展開はPhase2（OCR/AI連携）で対応する。
-            OperationType.Rename => _fileOperationService.RenameAsync(currentPath, RequirePattern(action), ct),
+            // Phase2: AI解析結果（category/metadata）によるプレースホルダー展開（ExpandRenamePattern）を
+            // 適用した上で新ファイル名として使用する。analyzeResponseがnull（AI解析未実行/失敗）の場合は
+            // Phase1と同じくPatternをそのまま使用する。禁止文字・末尾ドット等のサニタイズは
+            // FileOperationService.RenameAsync側で必ず行われる。
+            OperationType.Rename => _fileOperationService.RenameAsync(
+                currentPath, ExpandRenamePattern(RequirePattern(action), analyzeResponse), ct),
             OperationType.Recycle => _fileOperationService.RecycleAsync(currentPath, ct),
             _ => throw new InvalidOperationException($"未対応のOperationTypeです: {opType}"),
         };
@@ -307,13 +336,14 @@ public sealed class ProcessingCoordinator
             ? action.Pattern
             : throw new InvalidOperationException("rename アクションにはpatternの指定が必須です。");
 
-    private static string? BuildIntendedDestinationPath(string currentPath, RuleAction action, OperationType opType) => opType switch
+    private static string? BuildIntendedDestinationPath(
+        string currentPath, RuleAction action, OperationType opType, AnalyzeResponse? analyzeResponse) => opType switch
     {
         OperationType.Move or OperationType.Copy => !string.IsNullOrWhiteSpace(action.Destination)
             ? Path.Combine(action.Destination, Path.GetFileName(currentPath))
             : null,
         OperationType.Rename => !string.IsNullOrWhiteSpace(action.Pattern)
-            ? Path.Combine(Path.GetDirectoryName(currentPath) ?? string.Empty, action.Pattern)
+            ? Path.Combine(Path.GetDirectoryName(currentPath) ?? string.Empty, ExpandRenamePattern(action.Pattern, analyzeResponse))
             : null,
         _ => null, // Recycleに移動先の概念はない
     };
@@ -331,16 +361,165 @@ public sealed class ProcessingCoordinator
     }
 
     /// <summary>
-    /// Phase2拡張ポイント: OCR抽出（<see cref="IOcrService"/>）とAI/SLM解析
-    /// （<see cref="IPythonApiClient"/>）の呼び出し口。現時点では未使用（ダミー）で、
-    /// <paramref name="metadata"/>のOcrText/AiCategoryを書き換えない。
+    /// AI_IMPLEMENTATION_GUIDE.md §3.2の<c>POST /api/v1/analyze</c>リクエスト例に合わせた既定の
+    /// <c>extract_fields</c>。ルール側にフィールド一覧を指定する仕組みが無いため固定値を使用する。
     /// </summary>
-    private Task EnrichWithAiMetadataIfNeededAsync(FileMetadata metadata, CancellationToken ct)
+    private static readonly List<string> DefaultExtractFields = new() { "date", "company", "document_type", "category" };
+
+    /// <summary><paramref name="rules"/>に、OCR/AI解析を必要とする条件を持つ有効ルールが1件でもあるかを判定する。</summary>
+    private static bool RequiresAiEnrichment(IReadOnlyList<RuleModel> rules)
+        => rules.Any(r => r.Enabled && r.Conditions.Any(c => c.Type is "ocr_contains" or "ai_category"));
+
+    /// <summary>
+    /// Phase2 OCR/AI解析パイプライン: 2-1 <c>PdfToBitmapRenderer</c> → 2-2 <c>WindowsMediaOcrService</c>
+    /// （いずれも<see cref="IOcrService"/>実装内部）でOCR全文を抽出し、
+    /// 0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>で<c>category</c>/<c>metadata</c>を取得する。
+    /// 成功した範囲までの結果を<paramref name="metadata"/>（<see cref="FileMetadata.OcrText"/>/
+    /// <see cref="FileMetadata.AiCategory"/>）へ反映した上で、リネームpatternの変数展開に使う
+    /// <see cref="AnalyzeResponse"/>を返す。
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>フォールバック</b>: 以下はいずれも例外を投げず、当該ステップのみをスキップして
+    /// ルールベース仕分けへgracefulに退避する（仕様書§3.1「コンテンツ解析自動リネーム」）。
+    /// <list type="bullet">
+    /// <item>OCR未構成（<see cref="_ocrService"/>/<see cref="_pythonApiClient"/>が<c>null</c>）</item>
+    /// <item>現在のシステム言語のOCR言語パック未インストール（<see cref="IOcrService.IsLanguagePackAvailableAsync"/>が<c>false</c>）</item>
+    /// <item>OCR抽出失敗（<see cref="IOcrService.ExtractTextAsync"/>が<c>null</c>を返す、または想定外の例外を投げた場合）
+    /// → この場合Python連携自体を呼び出さない（テキストが無い解析は意味を持たないため）。
+    /// ただし<c>ocr_contains</c>条件はOCR成否そのもので判定するため、OCRが成功していれば
+    /// Python解析の成否に関わらず<see cref="FileMetadata.OcrText"/>は設定する。</item>
+    /// <item>Python API呼び出し失敗（<see cref="IPythonApiClient.AnalyzeAsync"/>が<c>null</c>を返す・
+    /// 例外を投げる・<see cref="AnalyzeResponse.Success"/>が<c>false</c>）→ <c>ai_category</c>は
+    /// 未設定のまま（該当ルールは不一致として扱われる）。</item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// <b>プライバシー（仕様書§7.2-6）</b>: OCR全文はここで抽出したローカル変数と、Python連携用の
+    /// 一時的な<see cref="AnalyzeRequest"/>にのみ乗る。DB（<see cref="HistoryRecord"/>）・ログへは
+    /// 一切書き込まず、Python連携（<see cref="IPythonApiClient.AnalyzeAsync"/>）へ引き渡した直後に
+    /// ローカル参照を破棄する。戻り値の<see cref="AnalyzeResponse"/>自体にはOCR全文を含まない
+    /// （<c>category</c>/<c>metadata</c>/<c>confidence</c>のみ）。
+    /// </para>
+    /// </remarks>
+    private async Task<AnalyzeResponse?> EnrichWithAiMetadataAsync(FileMetadata metadata, CancellationToken ct)
     {
-        _ = _ocrService;      // Phase2で使用予定（現時点では未使用）
-        _ = _pythonApiClient; // Phase2で使用予定（現時点では未使用）
-        _ = metadata;
-        _ = ct;
-        return Task.CompletedTask;
+        if (_ocrService is null || _pythonApiClient is null)
+        {
+            // Phase2依存先が未構成（DI未設定）→ gracefulにルールベースへ委ねる。
+            return null;
+        }
+
+        string? ocrText;
+        try
+        {
+            // 現在のシステム言語のOCR言語パック未インストール検出はIOcrService実装側の責務だが、
+            // ここでも事前チェックとして呼び出し、未インストール時はOCR自体を試みない。
+            if (!await _ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            // 2-1 PdfToBitmapRenderer → 2-2 WindowsMediaOcrService（IOcrService実装内部）でテキスト抽出。
+            ocrText = await _ocrService.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // IOcrService実装は原則例外を投げず null/false を返す設計だが、予期しない実装の
+            // 誤りも含め安全側でフォールバックする（本パイプライン全体を止めない）。
+            ocrText = null;
+        }
+
+        if (string.IsNullOrWhiteSpace(ocrText))
+        {
+            // OCR失敗（または対象外ファイル）→ Python連携も行わずgracefulに退避。
+            // ocr_contains/ai_category条件は未設定のまま（RuleEvaluatorは常に不一致として扱う）。
+            return null;
+        }
+
+        // ocr_contains条件はOCR全文そのものへの一致判定のため、Python解析の成否に関わらずここで設定する。
+        metadata.OcrText = ocrText;
+
+        var request = new AnalyzeRequest
+        {
+            FilePath = metadata.FullPath,
+            OcrText = ocrText,
+            ExtractFields = DefaultExtractFields,
+        };
+
+        AnalyzeResponse? response;
+        try
+        {
+            // 0-4 PythonApiClient.AnalyzeAsync呼び出し。
+            response = await _pythonApiClient.AnalyzeAsync(request, ct).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // 未Configure（Python未起動/ハンドシェイク未了）等、IPythonApiClient実装側が例外化しうる
+            // 呼び出し側の誤りも含め、ここでは握りつぶしgracefulにフォールバックする。
+            response = null;
+        }
+        finally
+        {
+            // OCR全文はPython連携へ引き渡した時点で役目を終える。このメソッド内のローカル参照を
+            // 明示的に手放す（仕様書§7.2-6: メモリからの速やかな破棄。DB/ログへは元々渡していない）。
+            // ※requestオブジェクト自体は書き換えない（呼び出し元/テストが送信内容を検証できるように、
+            //   また既にAnalyzeAsync呼び出しが完了済みの短命ローカルDTOを事後変更する必要は無いため）。
+            ocrText = null;
+        }
+
+        if (response is null || !response.Success)
+        {
+            // ai_category条件は未設定のまま（gracefulフォールバック）。ocr_containsは上で設定済みのため有効。
+            return null;
+        }
+
+        // ai_category条件をこの後のRuleEvaluator評価で使えるようにする。
+        metadata.AiCategory = response.Category;
+        return response;
+    }
+
+    /// <summary>
+    /// リネームpattern中の<c>{category}</c>・<c>{&lt;metadataキー&gt;}</c>
+    /// （例: <c>{date}</c>, <c>{company}</c>, <c>{document_type}</c>）を、
+    /// 0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>のレスポンス（<see cref="AnalyzeResponse.Category"/> /
+    /// <see cref="AnalyzeResponse.Metadata"/>）の値で置換する。
+    /// <paramref name="analyzeResponse"/>が<c>null</c>（AI解析未実行・失敗）の場合はPhase1と同じく
+    /// <paramref name="pattern"/>をそのまま返す（プレースホルダーは展開されない）。
+    /// 展開後の禁止文字・末尾ドット等のサニタイズは<see cref="Services.FileOperationService.RenameAsync"/>
+    /// 側で必ず行われるため、ここでは行わない。
+    /// </summary>
+    private static string ExpandRenamePattern(string pattern, AnalyzeResponse? analyzeResponse)
+    {
+        if (analyzeResponse is null)
+        {
+            return pattern;
+        }
+
+        string expanded = pattern;
+
+        if (!string.IsNullOrEmpty(analyzeResponse.Category))
+        {
+            expanded = ReplacePlaceholder(expanded, "category", analyzeResponse.Category);
+        }
+
+        if (analyzeResponse.Metadata is not null)
+        {
+            foreach (var (key, value) in analyzeResponse.Metadata)
+            {
+                expanded = ReplacePlaceholder(expanded, key, value);
+            }
+        }
+
+        return expanded;
+    }
+
+    private static string ReplacePlaceholder(string source, string key, string? value)
+    {
+        if (string.IsNullOrEmpty(key) || value is null)
+        {
+            return source;
+        }
+        return source.Replace("{" + key + "}", value, StringComparison.OrdinalIgnoreCase);
     }
 }

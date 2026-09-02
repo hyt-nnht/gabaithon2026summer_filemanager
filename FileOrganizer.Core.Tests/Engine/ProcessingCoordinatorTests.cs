@@ -33,6 +33,58 @@ internal sealed class FakeSettingsRepository : ISettingsRepository
 }
 
 /// <summary>
+/// テスト用<see cref="IOcrService"/>フェイク。呼び出し回数・引数を記録し、戻り値/例外を差し替えられる。
+/// </summary>
+internal sealed class FakeOcrService : IOcrService
+{
+    public bool LanguagePackAvailable { get; set; } = true;
+    public string? OcrTextToReturn { get; set; }
+    public bool ThrowOnExtract { get; set; }
+    public int ExtractTextCallCount { get; private set; }
+    public string? LastRequestedFilePath { get; private set; }
+
+    public Task<bool> IsLanguagePackAvailableAsync() => Task.FromResult(LanguagePackAvailable);
+
+    public Task<string?> ExtractTextAsync(string filePath, CancellationToken ct = default)
+    {
+        ExtractTextCallCount++;
+        LastRequestedFilePath = filePath;
+        if (ThrowOnExtract)
+        {
+            throw new InvalidOperationException("OCR抽出失敗（テスト用シミュレーション）");
+        }
+        return Task.FromResult(OcrTextToReturn);
+    }
+}
+
+/// <summary>
+/// テスト用<see cref="IPythonApiClient"/>フェイク。呼び出し回数・最後のリクエストを記録し、
+/// 戻り値/例外を差し替えられる。
+/// </summary>
+internal sealed class FakePythonApiClient : IPythonApiClient
+{
+    public AnalyzeResponse? ResponseToReturn { get; set; }
+    public bool ThrowOnAnalyze { get; set; }
+    public int AnalyzeCallCount { get; private set; }
+    public AnalyzeRequest? LastRequest { get; private set; }
+
+    public void Configure(int port, string bearerToken) { }
+
+    public Task<bool> HealthCheckAsync(CancellationToken ct = default) => Task.FromResult(true);
+
+    public Task<AnalyzeResponse?> AnalyzeAsync(AnalyzeRequest request, CancellationToken ct = default)
+    {
+        AnalyzeCallCount++;
+        LastRequest = request;
+        if (ThrowOnAnalyze)
+        {
+            throw new InvalidOperationException("Python API呼び出し失敗（テスト用シミュレーション）");
+        }
+        return Task.FromResult(ResponseToReturn);
+    }
+}
+
+/// <summary>
 /// 実<see cref="IHistoryRepository"/>実装をラップし、Insert/UpdateStateの呼び出し順序（状態遷移の
 /// 実際の順番）を記録する。DBへの実書き込みは<paramref name="inner"/>にそのまま委譲する。
 /// </summary>
@@ -144,13 +196,17 @@ public class ProcessingCoordinatorTests : IDisposable
     private ProcessingCoordinator CreateCoordinator(
         FakeSettingsRepository settingsRepository,
         IHistoryRepository? historyRepository = null,
-        ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename)
+        ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename,
+        IOcrService? ocrService = null,
+        IPythonApiClient? pythonApiClient = null)
     {
         return new ProcessingCoordinator(
             ruleEngine: new RuleEvaluator(),
             historyRepository: historyRepository ?? _realRepository,
             fileOperationService: new FileOperationService(watchSuppressor: null, renameConflictPolicy: defaultConflictPolicy),
             settingsRepository: settingsRepository,
+            ocrService: ocrService,
+            pythonApiClient: pythonApiClient,
             defaultConflictPolicy: defaultConflictPolicy);
     }
 
@@ -370,6 +426,155 @@ public class ProcessingCoordinatorTests : IDisposable
 
         Assert.True(File.Exists(Path.Combine(_destDir, "report.pdf"))); // コピー先は残る
         Assert.False(File.Exists(sourcePath)); // ゴミ箱送りにより元ファイルは消える
+    }
+
+    // --- Phase2: OCR/AI解析パイプライン（2-1/2-2 OCR → 0-4 PythonApiClient.AnalyzeAsync） -----------
+
+    [Fact]
+    public async Task ProcessAsync_ocr_containsルールがOCR抽出結果に一致すればそのルールが適用される()
+    {
+        string sourcePath = CreateSourceFile("invoice.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules = { CreateRule("請求書はdestへ", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir)) },
+        };
+        var ocr = new FakeOcrService { OcrTextToReturn = "株式会社サンプル 請求書 2026年8月25日" };
+        var python = new FakePythonApiClient(); // AnalyzeAsyncは呼ばれるが、この検証では戻り値は使わない
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(1, ocr.ExtractTextCallCount);
+        Assert.True(File.Exists(Path.Combine(_destDir, "invoice.pdf")));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_ai_categoryルールがPython解析結果に一致すればリネームpatternのプレースホルダーが展開される()
+    {
+        string sourcePath = CreateSourceFile("scan.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules =
+            {
+                CreateRule("請求書カテゴリはリネーム", Cond("ai_category", "equals", "invoice"),
+                    RenameTo("{date}_{company}.pdf")),
+            },
+        };
+        var ocr = new FakeOcrService { OcrTextToReturn = "株式会社サンプル 請求書 2026年8月25日" };
+        var python = new FakePythonApiClient
+        {
+            ResponseToReturn = new AnalyzeResponse
+            {
+                Success = true,
+                Category = "invoice",
+                Metadata = new Dictionary<string, string> { ["date"] = "2026-08-25", ["company"] = "サンプル株式会社" },
+            },
+        };
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(1, python.AnalyzeCallCount);
+        Assert.Equal(sourcePath, python.LastRequest!.FilePath);
+        Assert.Equal("株式会社サンプル 請求書 2026年8月25日", python.LastRequest!.OcrText);
+
+        string expectedPath = Path.Combine(_sourceDir, "2026-08-25_サンプル株式会社.pdf");
+        Assert.True(File.Exists(expectedPath));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_OCR抽出に失敗した場合はPython連携を呼ばずルールベースへフォールバックする()
+    {
+        string sourcePath = CreateSourceFile("report.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules =
+            {
+                // 優先ルール: OCR依存（OCRが失敗するため不一致になるはず）。
+                CreateRule("請求書はdestAへ", Cond("ocr_contains", "contains", "請求書"), MoveTo(Path.Combine(_workDir, "destA"))),
+                // フォールバック: 拡張子のみで判定するルールベースルール。
+                CreateRule("pdf全般はdestBへ", Cond("extension", "equals", "pdf"), MoveTo(Path.Combine(_workDir, "destB"))),
+            },
+        };
+        Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
+        var ocr = new FakeOcrService { ThrowOnExtract = true }; // OCR実装が例外を投げるケースも想定
+        var python = new FakePythonApiClient();
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(1, ocr.ExtractTextCallCount);
+        Assert.Equal(0, python.AnalyzeCallCount); // OCR失敗時はPython連携自体を呼ばない
+        Assert.True(File.Exists(Path.Combine(_workDir, "destB", "report.pdf")));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_PythonAPI呼び出しが失敗した場合はai_categoryルールへフォールバックせず後続ルールが適用される()
+    {
+        string sourcePath = CreateSourceFile("report.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules =
+            {
+                CreateRule("invoiceカテゴリはdestAへ", Cond("ai_category", "equals", "invoice"), MoveTo(Path.Combine(_workDir, "destA"))),
+                CreateRule("pdf全般はdestBへ", Cond("extension", "equals", "pdf"), MoveTo(Path.Combine(_workDir, "destB"))),
+            },
+        };
+        Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
+        var ocr = new FakeOcrService { OcrTextToReturn = "何らかのテキスト" };
+        var python = new FakePythonApiClient { ThrowOnAnalyze = true };
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(1, python.AnalyzeCallCount);
+        Assert.True(File.Exists(Path.Combine(_workDir, "destB", "report.pdf")));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_言語パック未インストールの場合はOCR抽出自体を試みずルールベースへフォールバックする()
+    {
+        string sourcePath = CreateSourceFile("report.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules =
+            {
+                CreateRule("請求書はdestAへ", Cond("ocr_contains", "contains", "請求書"), MoveTo(Path.Combine(_workDir, "destA"))),
+                CreateRule("pdf全般はdestBへ", Cond("extension", "equals", "pdf"), MoveTo(Path.Combine(_workDir, "destB"))),
+            },
+        };
+        Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
+        var ocr = new FakeOcrService { LanguagePackAvailable = false };
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: new FakePythonApiClient());
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(0, ocr.ExtractTextCallCount); // 言語パック未インストール検出時点でOCR自体を試みない
+        Assert.True(File.Exists(Path.Combine(_workDir, "destB", "report.pdf")));
+    }
+
+    [Fact]
+    public async Task ProcessAsync_どのルールもocr_containsとai_categoryを含まなければOCR_Python連携は一切呼ばれない()
+    {
+        string sourcePath = CreateSourceFile("report.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules = { CreateRule("pdfをdestへ", Cond("extension", "equals", "pdf"), MoveTo(_destDir)) },
+        };
+        var ocr = new FakeOcrService { OcrTextToReturn = "無視されるはずのテキスト" };
+        var python = new FakePythonApiClient();
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(0, ocr.ExtractTextCallCount);
+        Assert.Equal(0, python.AnalyzeCallCount);
     }
 
     // --- 引数検証 -------------------------------------------------------------------------
