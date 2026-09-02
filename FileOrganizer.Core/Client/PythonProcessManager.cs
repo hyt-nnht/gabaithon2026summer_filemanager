@@ -34,6 +34,12 @@ public sealed class PythonProcessManager : IDisposable
     /// <summary>Bearerトークンの文字数（16進数文字）。AI_IMPLEMENTATION_GUIDE.md §3.1 準拠。</summary>
     public const int TokenLength = 32;
 
+    /// <summary>
+    /// SLMモデルの配置先パスをPython子プロセスへ伝える環境変数名。
+    /// <c>py_service/src/file_analyzer/config.py</c>の<c>Settings.from_env</c>が読む変数名と一致させること。
+    /// </summary>
+    private const string SlmModelPathEnvironmentVariableName = "ANALYZER_SLM_MODEL";
+
     private static readonly TimeSpan DefaultHandshakeTimeout = TimeSpan.FromSeconds(10);
     private static readonly Regex PortLinePattern = new(@"^PORT:\s*(\d+)\s*$", RegexOptions.Compiled);
 
@@ -117,6 +123,11 @@ public sealed class PythonProcessManager : IDisposable
 
     /// <summary>
     /// SLM事前配置モデルの確認/オンデマンドダウンロードを、Pythonプロセスの起動前に統合した起動メソッド。
+    /// モデルが利用可能（事前配置認識 or オンデマンドダウンロード成功）になった場合、そのモデルパスを
+    /// 環境変数 <c>ANALYZER_SLM_MODEL</c> としてPython子プロセスへ渡す
+    /// （<c>py_service/src/file_analyzer/config.py</c>の<c>Settings.from_env</c>が読む変数名と一致させる）。
+    /// これにより、C#側でモデル準備が完了したにもかかわらずpy_serviceがモデルパスを認識できず
+    /// SLM推論が機能しない、という不整合を防ぐ。
     /// </summary>
     /// <param name="settings">
     /// <see cref="AppSettings.UsePreloadedSlmModel"/>/<see cref="AppSettings.SlmModelPath"/>を含む設定。
@@ -146,8 +157,19 @@ public sealed class PythonProcessManager : IDisposable
         ArgumentNullException.ThrowIfNull(modelDownloadManager);
 
         MarkStarted();
-        await EnsureSlmModelReadyAsync(settings, modelDownloadManager, modelDownloadProgress, ct).ConfigureAwait(false);
-        return await StartProcessCoreAsync(ct).ConfigureAwait(false);
+        string? readyModelPath = await EnsureSlmModelReadyAsync(settings, modelDownloadManager, modelDownloadProgress, ct)
+            .ConfigureAwait(false);
+
+        IReadOnlyDictionary<string, string>? extraEnvironmentVariables = null;
+        if (!string.IsNullOrWhiteSpace(readyModelPath))
+        {
+            extraEnvironmentVariables = new Dictionary<string, string>
+            {
+                [SlmModelPathEnvironmentVariableName] = readyModelPath,
+            };
+        }
+
+        return await StartProcessCoreAsync(ct, extraEnvironmentVariables).ConfigureAwait(false);
     }
 
     private void MarkStarted()
@@ -170,7 +192,12 @@ public sealed class PythonProcessManager : IDisposable
     /// <see cref="ModelDownloadManager.DownloadModelAsync"/>によるオンデマンドダウンロードを行い、
     /// その進捗を<paramref name="progress"/>へ中継する。
     /// </summary>
-    private static async Task EnsureSlmModelReadyAsync(
+    /// <returns>
+    /// モデルが利用可能になった（事前配置認識 or ダウンロード成功）場合は<paramref name="settings"/>の
+    /// <see cref="AppSettings.SlmModelPath"/>。SLM機能を使わない構成（無効・保存先未設定）の場合は<see langword="null"/>。
+    /// 呼び出し元はこの戻り値をPython子プロセスの<c>ANALYZER_SLM_MODEL</c>環境変数へ渡す。
+    /// </returns>
+    private static async Task<string?> EnsureSlmModelReadyAsync(
         AppSettings settings,
         ModelDownloadManager modelDownloadManager,
         IProgress<double>? progress,
@@ -184,13 +211,13 @@ public sealed class PythonProcessManager : IDisposable
         {
             // 事前配置モデルを認識済み → ダウンロード不要で即起動。UI側の進捗バーも即完了扱いにできるよう通知する。
             progress?.Report(1.0);
-            return;
+            return settings.SlmModelPath;
         }
 
         if (availability.Status is ModelAvailabilityStatus.Disabled or ModelAvailabilityStatus.PathNotConfigured)
         {
             // SLM事前配置機能が無効、または保存先未設定 → オンデマンドダウンロード対象外（SLM機能を使わない構成）。
-            return;
+            return null;
         }
 
         // FileNotFound / SizeTooSmall → オンデマンドダウンロードで取得し、進捗をUIへ中継する。
@@ -203,9 +230,19 @@ public sealed class PythonProcessManager : IDisposable
             throw new InvalidOperationException(
                 $"SLMモデルのオンデマンドダウンロードに失敗しました: {downloadResult.ErrorMessage}");
         }
+
+        return settings.SlmModelPath;
     }
 
-    private async Task<PythonHandshakeResult> StartProcessCoreAsync(CancellationToken ct)
+    /// <param name="ct">キャンセルトークン。</param>
+    /// <param name="extraEnvironmentVariables">
+    /// <c>ORGANIZER_IPC_TOKEN</c>に加えてPython子プロセスへ渡す追加の環境変数（省略可）。
+    /// 現状<see cref="StartAsync(AppSettings, ModelDownloadManager, IProgress{double}?, CancellationToken)"/>が
+    /// <c>ANALYZER_SLM_MODEL</c>を渡すために使用する。
+    /// </param>
+    private async Task<PythonHandshakeResult> StartProcessCoreAsync(
+        CancellationToken ct,
+        IReadOnlyDictionary<string, string>? extraEnvironmentVariables = null)
     {
         string token = RandomNumberGenerator.GetHexString(TokenLength);
 
@@ -223,6 +260,13 @@ public sealed class PythonProcessManager : IDisposable
             startInfo.ArgumentList.Add(argument);
         }
         startInfo.Environment["ORGANIZER_IPC_TOKEN"] = token;
+        if (extraEnvironmentVariables is not null)
+        {
+            foreach ((string key, string value) in extraEnvironmentVariables)
+            {
+                startInfo.Environment[key] = value;
+            }
+        }
 
         var process = new Process
         {

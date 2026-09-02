@@ -16,6 +16,10 @@
 #                            with -CrashExitCode. Simulates an OOM-style crash of an already-running
 #                            service, for the post-handshake crash-detection / respawn test cases.
 #   -CrashExitCode           Exit code used for the -CrashAfterHandshakeMs case (default 1)
+#   -EnvDumpPath             When set, writes the current value of ANALYZER_SLM_MODEL to this file
+#                            (or the literal "<not-set>" if the environment variable is absent/empty),
+#                            just before printing the PORT line. Lets a test assert on which environment
+#                            variables PythonProcessManager actually passed to the child process.
 
 param(
     [int]$Port = 55123,
@@ -23,7 +27,8 @@ param(
     [switch]$SuppressPort,
     [int]$ExitCode = -1,
     [int]$CrashAfterHandshakeMs = -1,
-    [int]$CrashExitCode = 1
+    [int]$CrashExitCode = 1,
+    [string]$EnvDumpPath = ""
 )
 
 if ($ExitCode -ge 0) {
@@ -38,6 +43,14 @@ if (-not $env:ORGANIZER_IPC_TOKEN) {
 
 if ($DelaySeconds -gt 0) {
     Start-Sleep -Seconds $DelaySeconds
+}
+
+if ($EnvDumpPath) {
+    if ($env:ANALYZER_SLM_MODEL) {
+        Set-Content -Path $EnvDumpPath -Value $env:ANALYZER_SLM_MODEL -NoNewline
+    } else {
+        Set-Content -Path $EnvDumpPath -Value "<not-set>" -NoNewline
+    }
 }
 
 if (-not $SuppressPort) {

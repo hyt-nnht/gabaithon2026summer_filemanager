@@ -188,6 +188,138 @@ public class PythonProcessManagerTests
         Assert.Null(manager.Process); // Pythonプロセスは起動されていないこと。
     }
 
+    // --- ANALYZER_SLM_MODEL環境変数の伝播（py_service/config.pyが読む変数名と一致させる） ---
+    // モデル準備（事前配置認識 or ダウンロード）が成功しても、Python子プロセスへ実際に
+    // ANALYZER_SLM_MODEL環境変数が渡っていなければpy_service側はモデルパスを認識できない。
+    // mock_py_service.ps1の-EnvDumpPathで、子プロセスが実際に受け取った環境変数の値をファイルへ
+    // 書き出させ、それを読み取って検証する。
+
+    [Fact]
+    public async Task StartAsync_統合版_事前配置モデルがReadyなら子プロセスにANALYZER_SLM_MODEL環境変数を渡す()
+    {
+        using var jobObjectManager = new JobObjectManager();
+        string envDumpPath = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonProcessManager", $"{Guid.NewGuid():N}.envdump");
+        Directory.CreateDirectory(Path.GetDirectoryName(envDumpPath)!);
+        using var manager = CreateManager(jobObjectManager, extraArgs: ["-Port", "55150", "-EnvDumpPath", envDumpPath]);
+
+        using var handler = new StubHttpMessageHandler(_ => throw new InvalidOperationException(
+            "事前配置モデルがReadyの場合、オンデマンドダウンロードは発生しないはず。"));
+        using var httpClient = new HttpClient(handler);
+        using var modelDownloadManager = new ModelDownloadManager(httpClient);
+
+        string modelPath = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonProcessManager", $"{Guid.NewGuid():N}.gguf");
+        Directory.CreateDirectory(Path.GetDirectoryName(modelPath)!);
+        using (var fs = new FileStream(modelPath, FileMode.Create))
+        {
+            fs.SetLength(ModelDownloadManager.ExpectedModelSizeBytes);
+        }
+
+        try
+        {
+            var settings = new AppSettings { UsePreloadedSlmModel = true, SlmModelPath = modelPath };
+
+            PythonHandshakeResult result = await manager.StartAsync(settings, modelDownloadManager);
+
+            Assert.Equal(55150, result.Port);
+            string dumpedValue = await ReadEnvDumpAsync(envDumpPath);
+            Assert.Equal(modelPath, dumpedValue);
+        }
+        finally
+        {
+            try { File.Delete(modelPath); } catch { /* ignore */ }
+            try { File.Delete(envDumpPath); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_統合版_ダウンロード成功後は子プロセスにANALYZER_SLM_MODEL環境変数を渡す()
+    {
+        using var jobObjectManager = new JobObjectManager();
+        string envDumpPath = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonProcessManager", $"{Guid.NewGuid():N}.envdump");
+        Directory.CreateDirectory(Path.GetDirectoryName(envDumpPath)!);
+        using var manager = CreateManager(jobObjectManager, extraArgs: ["-Port", "55151", "-EnvDumpPath", envDumpPath]);
+
+        long size = (long)(ModelDownloadManager.ExpectedModelSizeBytes * 0.6);
+        byte[] content = new byte[size];
+        using var handler = new StubHttpMessageHandler(_ => StubHttpMessageHandler.OkResponse(content));
+        using var httpClient = new HttpClient(handler);
+        using var modelDownloadManager = new ModelDownloadManager(httpClient);
+
+        string modelPath = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonProcessManager", $"{Guid.NewGuid():N}.gguf");
+
+        try
+        {
+            var settings = new AppSettings { UsePreloadedSlmModel = true, SlmModelPath = modelPath };
+
+            PythonHandshakeResult result = await manager.StartAsync(settings, modelDownloadManager);
+
+            Assert.Equal(55151, result.Port);
+            string dumpedValue = await ReadEnvDumpAsync(envDumpPath);
+            Assert.Equal(modelPath, dumpedValue);
+        }
+        finally
+        {
+            try { File.Delete(modelPath); } catch { /* ignore */ }
+            try { File.Delete(envDumpPath); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
+    public async Task StartAsync_統合版_SLM機能無効時は子プロセスにANALYZER_SLM_MODEL環境変数を渡さない()
+    {
+        using var jobObjectManager = new JobObjectManager();
+        string envDumpPath = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonProcessManager", $"{Guid.NewGuid():N}.envdump");
+        Directory.CreateDirectory(Path.GetDirectoryName(envDumpPath)!);
+        using var manager = CreateManager(jobObjectManager, extraArgs: ["-Port", "55152", "-EnvDumpPath", envDumpPath]);
+
+        using var handler = new StubHttpMessageHandler(_ => throw new InvalidOperationException(
+            "UsePreloadedSlmModelがfalseの場合、オンデマンドダウンロードは発生しないはず。"));
+        using var httpClient = new HttpClient(handler);
+        using var modelDownloadManager = new ModelDownloadManager(httpClient);
+
+        var settings = new AppSettings { UsePreloadedSlmModel = false, SlmModelPath = "" };
+
+        try
+        {
+            PythonHandshakeResult result = await manager.StartAsync(settings, modelDownloadManager);
+
+            Assert.Equal(55152, result.Port);
+            string dumpedValue = await ReadEnvDumpAsync(envDumpPath);
+            Assert.Equal("<not-set>", dumpedValue);
+        }
+        finally
+        {
+            try { File.Delete(envDumpPath); } catch { /* ignore */ }
+        }
+    }
+
+    /// <summary>
+    /// mock_py_service.ps1の-EnvDumpPathが書き出すファイルを読み取る。
+    /// スクリプトがPORT行を出力する直前に同期的に書き出すため、StartAsync完了後は
+    /// 既に書き込み済みのはずだが、念のため短いリトライ付きで読み取る。
+    /// </summary>
+    private static async Task<string> ReadEnvDumpAsync(string path)
+    {
+        for (int attempt = 0; attempt < 20; attempt++)
+        {
+            if (File.Exists(path))
+            {
+                try
+                {
+                    return await File.ReadAllTextAsync(path);
+                }
+                catch (IOException)
+                {
+                    // スクリプト側が書き込み中の可能性。リトライする。
+                }
+            }
+
+            await Task.Delay(50);
+        }
+
+        throw new IOException($"環境変数ダンプファイルを読み取れませんでした: {path}");
+    }
+
     // --- 異常終了検知（仕様書§7.2-3: Process.Exited + JobObject監視の組み合わせ） ---
 
     [Fact]
