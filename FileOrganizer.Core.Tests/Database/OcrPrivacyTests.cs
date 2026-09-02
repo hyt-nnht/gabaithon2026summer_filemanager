@@ -1,3 +1,4 @@
+using System.Reflection;
 using FileOrganizer.Core.Database;
 using FileOrganizer.Shared.Models;
 using Microsoft.Data.Sqlite;
@@ -5,23 +6,27 @@ using Microsoft.Data.Sqlite;
 namespace FileOrganizer.Core.Tests.Database;
 
 /// <summary>
-/// 仕様書§7.2-6「プライバシー」（OCR抽出テキスト全文はDBやログに永続化せず、リネーム変数生成後に
-/// メモリから即座に破棄すること）の検証。
+/// 仕様書§7.2-6「プライバシー: OCR抽出テキスト全文をDB・ログに永続化しないこと」
+/// （CLAUDE.mdの「プライバシー」ルールにも対応）の受け入れ基準を検証する。
+/// 対象: <see cref="HistoryRecord"/>（<c>SqliteHistoryRepository</c>が読み書きする型）と、
+/// 実際に<see cref="DatabaseInitializer"/>で作成される<c>operation_history</c>テーブルの実スキーマ。
 /// </summary>
 /// <remarks>
-/// <see cref="FileOrganizer.Infrastructure.Ocr.WindowsMediaOcrService"/>のXMLドキュメント（プライバシー設計）
-/// が示すとおり、OCR全文は<see cref="FileMetadata.OcrText"/>（プロセスメモリ上のみに存在する一時モデル）
-/// を経由するだけで、DB永続化モデルである<see cref="HistoryRecord"/>には最初からOCR文字列を保持する
-/// プロパティが存在しない。つまり「うっかり書いてしまう」経路自体が型システム上存在しない設計になっている。
-/// 本クラスはこれをリフレクション（型定義そのもの）とDB実スキーマ（<c>PRAGMA table_info</c>）の両面から
-/// 直接検証し、将来<see cref="HistoryRecord"/>やDDLにOCRテキスト保持用カラムがうっかり追加された場合に
-/// 検知できる回帰ガードとする。
+/// コード検査（「OCR全文はDBへ渡らない設計になっている」という静的な確認）だけでは、
+/// 将来の実装変更で回帰しても検知できない。そこで本クラスは、
+/// 1) DB永続化モデルの型定義（リフレクション）と
+/// 2) 実際に初期化したSQLite DBの実スキーマ（<c>PRAGMA table_info</c>）
+/// の両方を実行時に直接検証し、「OCR全文を保持する経路がそもそも存在しないこと」を
+/// 実行するたびに保証する回帰ガードとして機能する。
 /// </remarks>
 public class OcrPrivacyTests : IDisposable
 {
     private readonly string _workDir = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "OcrPrivacy", Guid.NewGuid().ToString("N"));
 
-    public OcrPrivacyTests() => Directory.CreateDirectory(_workDir);
+    public OcrPrivacyTests()
+    {
+        Directory.CreateDirectory(_workDir);
+    }
 
     public void Dispose()
     {
@@ -38,25 +43,45 @@ public class OcrPrivacyTests : IDisposable
         }
     }
 
-    [Fact]
-    public void HistoryRecord_OCR全文を保持するプロパティを持たない()
-    {
-        // DB永続化モデル（SqliteHistoryRepositoryが読み書きする型）にOCRテキスト用フィールドが
-        // 存在しないことを型定義そのものから確認する。存在しなければ、実装ミスでOCR全文を
-        // うっかりDBへ書き込んでしまうこと自体が構造的に不可能になる。
-        var suspiciousProperties = typeof(HistoryRecord).GetProperties()
-            .Where(p => p.Name.Contains("Ocr", StringComparison.OrdinalIgnoreCase)
-                     || p.Name.Contains("ExtractedText", StringComparison.OrdinalIgnoreCase))
-            .ToList();
+    /// <summary>
+    /// OCR全文を保持しうる名前（<c>Ocr</c>/<c>ExtractedText</c>を含む）かどうかを、
+    /// 大文字小文字を問わず判定する。
+    /// </summary>
+    private static bool LooksLikeOcrFullTextPropertyName(string propertyName)
+        => propertyName.Contains("Ocr", StringComparison.OrdinalIgnoreCase)
+        || propertyName.Contains("ExtractedText", StringComparison.OrdinalIgnoreCase);
 
-        Assert.Empty(suspiciousProperties);
+    /// <summary>
+    /// 実DBのカラム名（スネークケース）についても同様に判定する。
+    /// </summary>
+    private static bool LooksLikeOcrFullTextColumnName(string columnName)
+        => columnName.Contains("ocr", StringComparison.OrdinalIgnoreCase)
+        || columnName.Contains("extracted_text", StringComparison.OrdinalIgnoreCase);
+
+    [Fact]
+    public void HistoryRecord_OcrまたはExtractedTextを含む名前のプロパティが存在しない()
+    {
+        PropertyInfo[] properties = typeof(HistoryRecord).GetProperties(BindingFlags.Public | BindingFlags.Instance);
+
+        string[] offendingProperties = properties
+            .Select(p => p.Name)
+            .Where(LooksLikeOcrFullTextPropertyName)
+            .ToArray();
+
+        Assert.True(
+            offendingProperties.Length == 0,
+            "HistoryRecordにOCR全文を保持しうるプロパティが見つかりました: " + string.Join(", ", offendingProperties) +
+            "。CLAUDE.mdの「プライバシー」ルール（OCR抽出テキスト全文をDB・ログに永続化しない）に違反する可能性があります。");
     }
 
     [Fact]
-    public async Task operation_historyテーブルにOCR全文を保持するカラムが存在しない()
+    public async Task operation_historyテーブルの実スキーマにOcrまたはextracted_textを含むカラムが存在しない()
     {
-        string connectionString = DatabaseInitializer.BuildConnectionString(Path.Combine(_workDir, "history.db"));
-        await new DatabaseInitializer(connectionString).InitializeAsync();
+        string dbPath = Path.Combine(_workDir, "organizer.db");
+        string connectionString = DatabaseInitializer.BuildConnectionString(dbPath);
+        var initializer = new DatabaseInitializer(connectionString);
+
+        await initializer.InitializeAsync();
 
         await using var connection = new SqliteConnection(connectionString);
         await connection.OpenAsync();
@@ -65,17 +90,23 @@ public class OcrPrivacyTests : IDisposable
         command.CommandText = "PRAGMA table_info(operation_history);";
 
         var columnNames = new List<string>();
-        await using (var reader = await command.ExecuteReaderAsync())
+        await using (SqliteDataReader reader = await command.ExecuteReaderAsync())
         {
+            // PRAGMA table_info の列: cid, name, type, notnull, dflt_value, pk
+            int nameOrdinal = reader.GetOrdinal("name");
             while (await reader.ReadAsync())
             {
-                columnNames.Add(reader.GetString(reader.GetOrdinal("name")));
+                columnNames.Add(reader.GetString(nameOrdinal));
             }
         }
 
-        Assert.NotEmpty(columnNames); // 前提: テーブル自体は存在する。
-        Assert.DoesNotContain(columnNames, c =>
-            c.Contains("ocr", StringComparison.OrdinalIgnoreCase) ||
-            c.Contains("extracted_text", StringComparison.OrdinalIgnoreCase));
+        Assert.NotEmpty(columnNames); // テーブル自体が存在し、カラムを取得できていることの前提確認。
+
+        string[] offendingColumns = columnNames.Where(LooksLikeOcrFullTextColumnName).ToArray();
+
+        Assert.True(
+            offendingColumns.Length == 0,
+            "operation_historyテーブルにOCR全文を保持しうるカラムが見つかりました: " + string.Join(", ", offendingColumns) +
+            "。CLAUDE.mdの「プライバシー」ルール（OCR抽出テキスト全文をDB・ログに永続化しない）に違反する可能性があります。");
     }
 }

@@ -21,34 +21,13 @@ namespace FileOrganizer.Core.Client;
 /// 3. 起動したプロセスは道連れ終了のため <see cref="JobObjectManager"/> に割り当てる。
 /// 4. ハンドシェイクが既定10秒以内に完了しない場合は <see cref="TimeoutException"/> をスローする。
 ///
-/// 注意: 本クラスは起動対象の実行ファイル/引数を外部から指定できる設計にしている。
-/// リポジトリ同梱の <c>py_service</c> は本ドキュメント作成時点で <c>py_service/main.py</c> を
-/// 持たず（実際のエントリポイントは <c>python -m file_analyzer</c>）、stdout出力も
-/// <c>PORT={port}</c>（コロンなし）、認証トークンの環境変数名も <c>ANALYZER_BEARER_TOKEN</c> と、
-/// いずれも本仕様（§3.1 / CONTRACTS.md）と一致していない。Python担当者との合意が取れるまでは
-/// <see cref="CreateForPyService"/> をそのまま使わず、コンストラクタへ直接実行ファイル/引数を渡すか、
-/// テスト用モックスクリプト（<c>FileOrganizer.Core.Tests/TestAssets/mock_py_service.ps1</c>）で
-/// 起動確認を行うこと。
-///
-/// <para>
-/// <b>SLM事前配置モデルとの統合（仕様書§3.1「DL待ち時間ゼロ化」）</b>:
-/// <see cref="StartAsync(AppSettings, ModelDownloadManager, IProgress{double}?, CancellationToken)"/>
-/// を使うと、Pythonプロセスの起動（<see cref="Process.Start"/>）より前に
-/// <see cref="ModelDownloadManager.CheckPreloadedModelAsync"/> で事前配置モデルの有無を確認し、
-/// 認識できればダウンロードを一切行わず即座に起動する。未配置・破損時のみ
-/// <see cref="ModelDownloadManager.DownloadModelAsync"/> によるオンデマンドダウンロードへ切り替え、
-/// その進捗を引数の<see cref="IProgress{T}"/>&lt;double&gt;経由でUI（SLMモデル取得進捗バー、仕様書§4.1）
-/// へ中継する。単純にPythonを起動するだけであれば従来どおり
-/// <see cref="StartAsync(CancellationToken)"/> を使えばよい。
-/// </para>
-/// <para>
-/// <b>異常終了検知と自動リスポーン（仕様書§7.2-3）</b>: ハンドシェイク完了後（正常稼働中）にプロセスが
-/// 意図せず終了した場合、<see cref="ProcessCrashed"/>イベントが発火する（<c>Process.Exited</c>と
-/// <see cref="JobObjectManager.IsProcessActive"/>の突き合わせによる検知。詳細は同イベントのドキュメント参照）。
-/// 本クラス自体はプロセス起動・監視の責務のみを持ち、「PythonApiClient呼び出し失敗時に1回だけ
-/// 自動リスポーン＋ハンドシェイクを再試行し、連続失敗時はUI層へ通知する」という復旧オーケストレーションは
-/// <see cref="PythonServiceSupervisor"/>が担う。
-/// </para>
+/// 【解消済み】本クラスは起動対象の実行ファイル/引数を外部から指定できる設計にしている。
+/// 以前は「リポジトリ同梱の<c>py_service</c>が<c>py_service/main.py</c>を持たない」等、
+/// 本仕様（§3.1 / CONTRACTS.md）とのずれを理由に<see cref="CreateForPyService"/>の使用を
+/// 見合わせる注意書きがあったが、現在の<c>py_service/main.py</c>は<c>PORT: {number}</c>
+/// （コロンあり）をstdoutへ出力し、環境変数名も<c>ORGANIZER_IPC_TOKEN</c>で一致している
+/// ことをNFR_INTEGRATION_TEST_REPORT.md §6の実py_service E2Eで確認済み。
+/// <see cref="CreateForPyService"/>はそのまま使用してよい（<c>--port 0</c>を自動付与する）。
 /// </remarks>
 public sealed class PythonProcessManager : IDisposable
 {
@@ -112,7 +91,10 @@ public sealed class PythonProcessManager : IDisposable
 
         string workingDirectory = Path.Combine(repositoryRootDirectory, "py_service");
         string scriptPath = Path.Combine(workingDirectory, "main.py");
-        return new PythonProcessManager(jobObjectManager, pythonExecutable, [scriptPath], workingDirectory, handshakeTimeout);
+        // --port 0 を明示しないと main.py は既定の固定ポート(8765)でuvicornを起動し、
+        // "PORT: {number}" 行を一切出力しないためハンドシェイクが必ずタイムアウトする
+        // （py_service/src/file_analyzer/__main__.py 参照）。
+        return new PythonProcessManager(jobObjectManager, pythonExecutable, [scriptPath, "--port", "0"], workingDirectory, handshakeTimeout);
     }
 
     /// <summary>起動済みプロセス（未起動なら<c>null</c>）。停止/監視用に読み取り専用で公開。</summary>

@@ -33,7 +33,7 @@ public static class ShellFileOperations
     private class FileOperation { }
 
     [ComImport]
-    [Guid("947aab5f-0a5c-4c13-b4d6-4bf50368389b")]
+    [Guid("947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IFileOperation
     {
