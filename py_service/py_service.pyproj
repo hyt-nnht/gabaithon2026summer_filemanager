@@ -5,16 +5,20 @@
     <ProjectGuid>{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}</ProjectGuid>
     <ProjectHome>.</ProjectHome>
     <StartupFile>main.py</StartupFile>
-    <SearchPath>
-    </SearchPath>
+    <SearchPath>src</SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
     <OutputPath>.</OutputPath>
     <Name>py_service</Name>
     <RootNamespace>py_service</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="**\*.py" />
+    <Compile Include="main.py" />
+    <Compile Include="src\**\*.py" />
+    <Compile Include="tests\**\*.py" />
+    <Content Include="README.md" />
+    <Content Include="pyproject.toml" />
     <Content Include="requirements.txt" />
+    <Content Include="機能説明書.md" />
     <Content Include="openapi_schema.json" />
   </ItemGroup>
   <ItemGroup>

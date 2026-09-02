@@ -54,37 +54,39 @@ export ANALYZER_ALLOWED_ROOT=/home/rdoki/projects/gabaithon26sm
 ./py_service/.venv/bin/python -m file_analyzer --host 127.0.0.1 --port 8765
 ```
 
-Windows PowerShellでは`ANALYZER_SLM_MODEL`と`ANALYZER_ALLOWED_ROOT`をWindows形式の絶対パスで設定してください。動的ポートを使う場合は`--port 0`を指定し、標準出力の`PORT=<実ポート>`をC#側で読み取ります。
+Windows PowerShellでは`ANALYZER_SLM_MODEL`と`ANALYZER_ALLOWED_ROOT`をWindows形式の絶対パスで設定してください。動的ポートを使う場合は`--port 0`を指定し、標準出力の`PORT: <実ポート>`をC#側で読み取ります。
+
+Visual Studioでは`FileOrganizer.slnx`を開き、`py_service`のPython環境として`py_service/.venv`を選択します。スタートアップファイルは`main.py`としてプロジェクトに設定済みです。
 
 ## API
 
-- `GET /v1/health`: PDF、OCR、SLMの利用可否
-- `POST /v1/warmup`: OCRとSLMの事前ロード・疎通
-- `POST /v1/analyze`: テキスト抽出、規則分類、SLM推論、最終候補の生成
+- `GET /api/v1/health`: PDF、OCR、SLMの利用可否
+- `POST /api/v1/warmup`: OCRとSLMのロード・疎通
+- `POST /api/v1/analyze`: C#の`AnalyzeRequest`/`AnalyzeResponse`契約に準拠した解析
+- `POST /v1/analyze`: Python側の詳細結果を確認するデバッグ用API
 - Swagger UI: `http://127.0.0.1:8765/docs`
 
-`ANALYZER_BEARER_TOKEN`を設定した場合は、全APIへ`Authorization: Bearer <token>`が必要です。
+FileOrganizerから起動する場合は`ORGANIZER_IPC_TOKEN`を設定し、全APIへ`Authorization: Bearer <token>`を付けます。手動実行との後方互換用に`ANALYZER_BEARER_TOKEN`も利用できます。
 
 解析例:
 
 ```json
 {
-  "schema_version": "1.0",
-  "job_id": "demo-001",
   "file_path": "C:\\Demo\\Inbox\\invoice.pdf",
-  "analysis_mode": "slm_with_rules_fallback",
-  "language": "ja"
+  "ocr_text": "株式会社サンプル御中 請求書 2026年8月25日 合同会社テックサプライ",
+  "extract_fields": ["date", "company", "document_type", "category"]
 }
 ```
 
-SLMが未設定、推論失敗、JSON不正の場合もHTTP 200の`partial`として規則結果を返します。`rules_only`を指定すればSLMを呼びません。抽出全文はAPIレスポンスやログに出さず、レスポンスのプレビューは先頭1,000文字だけです。
+`ocr_text`があればそのテキストを直接分類し、`null`または空文字ならPython側でPDF/画像から抽出します。SLMが未設定、推論失敗、JSON不正の場合も規則結果へフォールバックし、解析できた場合は`success: true`を返します。
 
 ## 主な環境変数
 
 | 変数 | 既定値 | 用途 |
 |---|---:|---|
 | `ANALYZER_ALLOWED_ROOT` | 起動ディレクトリ | 読み取りを許可するルート |
-| `ANALYZER_BEARER_TOKEN` | 未設定 | localhost APIの認証トークン |
+| `ORGANIZER_IPC_TOKEN` | 未設定 | C#とのIPCで使用するBearerトークン |
+| `ANALYZER_BEARER_TOKEN` | 未設定 | 手動実行向けの旧Bearerトークン |
 | `ANALYZER_MIN_PDF_TEXT_CHARS` | `50` | テキストPDFと判断する最小文字数 |
 | `ANALYZER_MAX_PDF_PAGES` | `10` | pypdfで読む最大ページ数 |
 | `ANALYZER_MAX_OCR_PDF_PAGES` | `3` | スキャンPDFをOCRする最大ページ数 |

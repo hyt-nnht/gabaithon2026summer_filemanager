@@ -17,8 +17,40 @@ from ..errors import AnalysisError, SlmError
 from ..extractors.pdf import PdfExtractor
 from ..extractors.rapidocr import RapidOcrExtractor
 from ..extractors.router import TextExtractionRouter
+from ..naming import DOCUMENT_TYPE_LABELS
 from ..pipeline import AnalysisCoordinator
-from .contracts import AnalyzeRequest, WarmupResponse
+from .contracts import AnalyzeRequest, AnalyzeResponse, DetailedAnalyzeRequest, WarmupResponse
+
+
+def build_ipc_response(result: dict[str, Any], extract_fields: list[str]) -> AnalyzeResponse:
+    """Convert the detailed internal result to FileOrganizer.Shared.AnalyzeResponse."""
+
+    decision = result["final_decision"]
+    category = DOCUMENT_TYPE_LABELS[decision["document_type"]]
+    available_metadata = {
+        "date": decision["document_date"],
+        "company": decision["organization"],
+        "document_type": category,
+        "category": category,
+        "title": decision["suggested_base_name"],
+    }
+    metadata = {
+        field: value
+        for field in extract_fields
+        if isinstance((value := available_metadata.get(field)), str) and value
+    }
+    ai_suggestion = result.get("ai_suggestion")
+    confidence = (
+        ai_suggestion.get("confidence")
+        if decision["decision_source"] == "slm" and isinstance(ai_suggestion, dict)
+        else None
+    )
+    return AnalyzeResponse(
+        success=True,
+        category=category,
+        metadata=metadata,
+        confidence=confidence,
+    )
 
 
 def _build_services(settings: Settings) -> tuple[AnalysisCoordinator, RapidOcrExtractor, LlamaCppSlmClassifier]:
@@ -56,7 +88,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     auth = Depends(authorize)
 
-    @api.get("/v1/health", dependencies=[auth])
+    @api.get("/api/v1/health", dependencies=[auth])
+    @api.get("/v1/health", dependencies=[auth], include_in_schema=False)
     async def health() -> dict[str, Any]:
         pdf_available = importlib.util.find_spec("pypdf") is not None
         ocr_available = ocr.available and importlib.util.find_spec("pypdfium2") is not None
@@ -70,7 +103,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "slm_model": slm.model_name,
         }
 
-    @api.post("/v1/warmup", response_model=WarmupResponse, dependencies=[auth])
+    @api.post("/api/v1/warmup", response_model=WarmupResponse, dependencies=[auth])
+    @api.post("/v1/warmup", response_model=WarmupResponse, dependencies=[auth], include_in_schema=False)
     async def warmup() -> WarmupResponse:
         started = perf_counter()
         warnings: list[dict[str, str]] = []
@@ -93,8 +127,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             warnings=warnings,
         )
 
-    @api.post("/v1/analyze", dependencies=[auth])
-    async def analyze(request: AnalyzeRequest) -> JSONResponse:
+    @api.post("/api/v1/analyze", response_model=AnalyzeResponse, dependencies=[auth])
+    async def analyze_ipc(request: AnalyzeRequest) -> AnalyzeResponse:
+        try:
+            result = await to_thread(
+                coordinator.analyze,
+                job_id="ipc",
+                file_path=request.file_path,
+                expected_size=None,
+                expected_last_write_utc=None,
+                analysis_mode="slm_with_rules_fallback",
+                provided_ocr_text=request.ocr_text,
+            )
+            return build_ipc_response(result, request.extract_fields)
+        except AnalysisError:
+            return AnalyzeResponse(success=False)
+
+    @api.post("/v1/analyze", dependencies=[auth], include_in_schema=False)
+    async def analyze_detailed(request: DetailedAnalyzeRequest) -> JSONResponse:
         try:
             result = await to_thread(
                 coordinator.analyze,

@@ -28,6 +28,17 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual("receipt", result.document_type)
         self.assertEqual(0.8, result.confidence)
 
+    def test_slm_json_can_be_cut_out_of_markdown_and_trailing_text(self) -> None:
+        result = parse_slm_json(
+            "```json\n"
+            '{"document_type":"contract","organization":"サンプル株式会社",'
+            '"document_date":"2026-08-31","confidence":0.8,"reason":"契約書表記"}'
+            "\n```\n分類完了"
+        )
+
+        self.assertEqual("contract", result.document_type)
+        self.assertEqual("サンプル株式会社", result.organization)
+
     def test_slm_rejects_unknown_document_type(self) -> None:
         with self.assertRaises(InvalidModelOutput):
             parse_slm_json(
@@ -102,6 +113,20 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual("receipt", result.document_type)
         self.assertEqual("規則株式会社", result.organization)
         self.assertEqual("2026-08-30", result.document_date)
+
+    def test_explicit_document_heading_is_not_overridden_by_conflicting_slm(self) -> None:
+        baseline = ClassificationCandidate(
+            "invoice",
+            "規則株式会社",
+            "2026-08-30",
+            reason="一致キーワード: 請求書、請求金額、支払期限",
+        )
+        ai = ClassificationCandidate("receipt", "規則株式会社", "2026-08-30", 0.95, source="slm")
+
+        result = AnalysisCoordinator._merge(baseline, ai)
+
+        self.assertEqual("rules", result.decision_source)
+        self.assertEqual("invoice", result.document_type)
 
 
 if __name__ == "__main__":

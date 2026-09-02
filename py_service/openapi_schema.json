@@ -1,0 +1,156 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "File Analyzer IPC API",
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "summary": "Check analyzer dependencies",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service status"
+          },
+          "401": {
+            "description": "Invalid IPC token"
+          }
+        }
+      }
+    },
+    "/api/v1/warmup": {
+      "post": {
+        "summary": "Load and verify OCR and SLM",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Warmup result"
+          },
+          "401": {
+            "description": "Invalid IPC token"
+          }
+        }
+      }
+    },
+    "/api/v1/analyze": {
+      "post": {
+        "summary": "Analyze a local document",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnalyzeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Analysis result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnalyzeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid IPC token"
+          },
+          "422": {
+            "description": "Invalid request body"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
+    "schemas": {
+      "AnalyzeRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "file_path",
+          "extract_fields"
+        ],
+        "properties": {
+          "file_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "ocr_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extract_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AnalyzeResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "category",
+          "metadata",
+          "confidence"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "confidence": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -26,9 +26,10 @@ class Settings:
     def from_env(cls) -> "Settings":
         model_value = os.getenv("ANALYZER_SLM_MODEL")
         threads_value = os.getenv("ANALYZER_SLM_THREADS")
+        bearer_token = os.getenv("ORGANIZER_IPC_TOKEN") or os.getenv("ANALYZER_BEARER_TOKEN") or None
         return cls(
             allowed_root=Path(os.getenv("ANALYZER_ALLOWED_ROOT", os.getcwd())).resolve(),
-            bearer_token=os.getenv("ANALYZER_BEARER_TOKEN") or None,
+            bearer_token=bearer_token,
             max_file_bytes=int(os.getenv("ANALYZER_MAX_FILE_BYTES", 20 * 1024 * 1024)),
             max_pdf_pages=int(os.getenv("ANALYZER_MAX_PDF_PAGES", "10")),
             min_pdf_text_chars=int(os.getenv("ANALYZER_MIN_PDF_TEXT_CHARS", "50")),
