@@ -69,6 +69,76 @@ public static class SafeFileOperations
             : MoveFileFallbackAsync(sourcePath, destinationDirectory, newFileName, cancellationToken);
     }
 
+    /// <summary>
+    /// ファイルを安全にコピーする（Cross-Volume・ディレクトリ自動作成対応）。
+    /// <see cref="ShellFileOperations.CopyFileSafelyAsync"/>を優先し、
+    /// このマシンでIFileOperationのCOMアクティブ化が使えない場合は
+    /// <see cref="Microsoft.VisualBasic.FileIO.FileSystem"/>ベースのフォールバックへ切り替える。
+    /// </summary>
+    public static Task<bool> CopyFileSafelyAsync(
+        string sourcePath,
+        string destinationDirectory,
+        string? newFileName = null,
+        IProgress<FileOperationProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return IsIFileOperationAvailable.Value
+            ? ShellFileOperations.CopyFileSafelyAsync(sourcePath, destinationDirectory, newFileName, progress, cancellationToken)
+            : CopyFileFallbackAsync(sourcePath, destinationDirectory, newFileName, cancellationToken);
+    }
+
+    /// <summary>
+    /// ファイルを安全にリネームする（同一フォルダ内）。
+    /// <see cref="ShellFileOperations.RenameFileSafelyAsync"/>を優先し、
+    /// このマシンでIFileOperationのCOMアクティブ化が使えない場合は
+    /// <see cref="Microsoft.VisualBasic.FileIO.FileSystem"/>ベースのフォールバックへ切り替える。
+    /// </summary>
+    /// <remarks>
+    /// Windowsのファイルシステムは大文字小文字を区別しないため、大文字小文字のみが異なる
+    /// リネーム（例: "report.txt" → "REPORT.txt"）は、COM <c>IFileOperation</c>・
+    /// <c>Microsoft.VisualBasic.FileIO</c>フォールバックのいずれも単純な1回のリネームでは
+    /// 「移動先に同名ファイルが既に存在する」と誤認識して失敗する。本メソッドはこのケースを検知し、
+    /// 一意な一時ファイル名を経由する2段階リネームで確実に反映する。
+    /// </remarks>
+    public static async Task<bool> RenameFileSafelyAsync(
+        string sourcePath,
+        string newFileName,
+        IProgress<FileOperationProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        string? directory = Path.GetDirectoryName(sourcePath);
+        string currentFileName = Path.GetFileName(sourcePath);
+
+        bool isCaseOnlyChange = !string.IsNullOrEmpty(directory)
+            && string.Equals(currentFileName, newFileName, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(currentFileName, newFileName, StringComparison.Ordinal);
+
+        if (!isCaseOnlyChange)
+        {
+            return await RenameFileSafelyCoreAsync(sourcePath, newFileName, progress, cancellationToken).ConfigureAwait(false);
+        }
+
+        string tempFileName = $"{currentFileName}.{Guid.NewGuid():N}.tmp";
+        if (!await RenameFileSafelyCoreAsync(sourcePath, tempFileName, progress, cancellationToken).ConfigureAwait(false))
+        {
+            return false;
+        }
+
+        string tempPath = Path.Combine(directory!, tempFileName);
+        return await RenameFileSafelyCoreAsync(tempPath, newFileName, progress, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static Task<bool> RenameFileSafelyCoreAsync(
+        string sourcePath,
+        string newFileName,
+        IProgress<FileOperationProgress>? progress,
+        CancellationToken cancellationToken)
+    {
+        return IsIFileOperationAvailable.Value
+            ? ShellFileOperations.RenameFileSafelyAsync(sourcePath, newFileName, progress, cancellationToken)
+            : RenameFileFallbackAsync(sourcePath, newFileName, cancellationToken);
+    }
+
     /// <summary>このプロセスで<c>IFileOperation</c>のCOMアクティブ化が可能かどうか（診断用に公開）。</summary>
     public static bool IsUsingShellFileOperations => IsIFileOperationAvailable.Value;
 
@@ -128,6 +198,64 @@ public static class SafeFileOperations
                 // Microsoft.VisualBasic.FileIO.FileSystem.MoveFile はCross-Volume移動にも対応
                 // （内部でSHFileOperationのFO_MOVEを使用、必要に応じてコピー+削除に自動フォールバック）。
                 FileSystem.MoveFile(sourcePath, destinationPath, UIOption.OnlyErrorDialogs);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }, cancellationToken);
+    }
+
+    private static Task<bool> CopyFileFallbackAsync(
+        string sourcePath,
+        string destinationDirectory,
+        string? newFileName,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(() =>
+        {
+            if (!File.Exists(sourcePath))
+            {
+                return false;
+            }
+
+            if (!Directory.Exists(destinationDirectory))
+            {
+                Directory.CreateDirectory(destinationDirectory);
+            }
+
+            string destinationFileName = newFileName ?? Path.GetFileName(sourcePath);
+            string destinationPath = Path.Combine(destinationDirectory, destinationFileName);
+
+            try
+            {
+                // Microsoft.VisualBasic.FileIO.FileSystem.CopyFile はCross-Volumeコピーにも対応。
+                FileSystem.CopyFile(sourcePath, destinationPath, UIOption.OnlyErrorDialogs);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }, cancellationToken);
+    }
+
+    private static Task<bool> RenameFileFallbackAsync(
+        string sourcePath,
+        string newFileName,
+        CancellationToken cancellationToken)
+    {
+        return Task.Run(() =>
+        {
+            if (!File.Exists(sourcePath))
+            {
+                return false;
+            }
+
+            try
+            {
+                FileSystem.RenameFile(sourcePath, newFileName);
                 return true;
             }
             catch

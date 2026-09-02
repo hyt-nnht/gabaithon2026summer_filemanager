@@ -12,6 +12,12 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- HashHelperの大容量ファイル用チャンクハッシュ経路（100MB閾値を経由しない内部エントリポイント）を
+         単体テストから直接検証できるようにする。 -->
+    <InternalsVisibleTo Include="FileOrganizer.Core.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- Database/: SQLite WAL永続化（HistoryRecord/AppSettings/RuleModel） -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <!-- Client/: Python (FastAPI) IPC通信のJSONシリアライズは System.Text.Json（.NET 10 SDKに同梱のためPackageReference不要） -->

@@ -339,4 +339,114 @@ public static class ShellFileOperations
             }
         }, cancellationToken);
     }
+
+    /// <summary>
+    /// ファイルを安全にコピー（非同期・固定STAプール・Cross-Volume並行処理・キャンセル・進捗通知・ディレクトリ自動生成）
+    /// </summary>
+    public static Task<bool> CopyFileSafelyAsync(
+        string sourcePath,
+        string destinationDirectory,
+        string? newFileName = null,
+        IProgress<FileOperationProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return EnqueueStaTaskAsync(() =>
+        {
+            if (!File.Exists(sourcePath)) return false;
+
+            if (!Directory.Exists(destinationDirectory))
+            {
+                Directory.CreateDirectory(destinationDirectory);
+            }
+
+            IFileOperation? fileOp = null;
+            uint cookie = 0;
+            try
+            {
+                fileOp = (IFileOperation)new FileOperation();
+                fileOp.SetOperationFlags(FileOperationFlags.FOF_ALLOWUNDO | FileOperationFlags.FOF_NOCONFIRMATION | FileOperationFlags.FOF_SILENT | FileOperationFlags.FOF_NOERRORUI);
+
+                var sink = new FileOpProgressSink(progress, cancellationToken);
+                cookie = fileOp.Advise(sink);
+
+                SHCreateItemFromParsingName(sourcePath, IntPtr.Zero, IShellItemGuid, out IShellItem sourceItem);
+                SHCreateItemFromParsingName(destinationDirectory, IntPtr.Zero, IShellItemGuid, out IShellItem destFolderItem);
+
+                fileOp.CopyItem(sourceItem, destFolderItem, newFileName, sink);
+                fileOp.PerformOperations();
+
+                // 【重要】コールバック中断または外部キャンセル要求を検知し、Task に確実に Canceled を伝播
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return !fileOp.GetAnyOperationsAborted();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (fileOp != null)
+                {
+                    if (cookie != 0) fileOp.Unadvise(cookie);
+                    Marshal.ReleaseComObject(fileOp);
+                }
+            }
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// ファイルを安全にリネーム（同一フォルダ内、非同期・固定STAプール・キャンセル・進捗通知対応）
+    /// </summary>
+    public static Task<bool> RenameFileSafelyAsync(
+        string sourcePath,
+        string newFileName,
+        IProgress<FileOperationProgress>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        return EnqueueStaTaskAsync(() =>
+        {
+            if (!File.Exists(sourcePath)) return false;
+
+            IFileOperation? fileOp = null;
+            uint cookie = 0;
+            try
+            {
+                fileOp = (IFileOperation)new FileOperation();
+                fileOp.SetOperationFlags(FileOperationFlags.FOF_ALLOWUNDO | FileOperationFlags.FOF_NOCONFIRMATION | FileOperationFlags.FOF_SILENT | FileOperationFlags.FOF_NOERRORUI);
+
+                var sink = new FileOpProgressSink(progress, cancellationToken);
+                cookie = fileOp.Advise(sink);
+
+                SHCreateItemFromParsingName(sourcePath, IntPtr.Zero, IShellItemGuid, out IShellItem sourceItem);
+
+                fileOp.RenameItem(sourceItem, newFileName, sink);
+                fileOp.PerformOperations();
+
+                cancellationToken.ThrowIfCancellationRequested();
+
+                return !fileOp.GetAnyOperationsAborted();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch
+            {
+                return false;
+            }
+            finally
+            {
+                if (fileOp != null)
+                {
+                    if (cookie != 0) fileOp.Unadvise(cookie);
+                    Marshal.ReleaseComObject(fileOp);
+                }
+            }
+        }, cancellationToken);
+    }
 }
