@@ -81,4 +81,55 @@ public class JobObjectManagerTests
 
         Assert.Throws<ArgumentNullException>(() => jobObjectManager.AssignProcess(null!));
     }
+
+    // --- GetActiveProcessIds/IsProcessActive: PythonProcessManagerの異常終了検知（仕様書§7.2-3）が
+    //     Process.Exitedと突き合わせる「Job Object側の実プロセス一覧」の検証。 ---
+
+    [Fact]
+    public void GetActiveProcessIds_AfterAssign_ContainsAssignedProcessId()
+    {
+        using var process = Process.Start(new ProcessStartInfo(NotepadPath) { UseShellExecute = false });
+        Assert.NotNull(process);
+
+        try
+        {
+            using var jobObjectManager = new JobObjectManager();
+            jobObjectManager.AssignProcess(process);
+
+            Assert.Contains(process.Id, jobObjectManager.GetActiveProcessIds());
+            Assert.True(jobObjectManager.IsProcessActive(process.Id));
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
+        }
+    }
+
+    [Fact]
+    public void IsProcessActive_AfterProcessExits_ReturnsFalse()
+    {
+        using var process = Process.Start(new ProcessStartInfo(NotepadPath) { UseShellExecute = false });
+        Assert.NotNull(process);
+
+        using var jobObjectManager = new JobObjectManager();
+        jobObjectManager.AssignProcess(process);
+        Assert.True(jobObjectManager.IsProcessActive(process.Id));
+
+        process.Kill();
+        process.WaitForExit(TimeSpan.FromSeconds(5));
+
+        Assert.False(jobObjectManager.IsProcessActive(process.Id));
+    }
+
+    [Fact]
+    public void GetActiveProcessIds_AfterDispose_ThrowsObjectDisposedException()
+    {
+        var jobObjectManager = new JobObjectManager();
+        jobObjectManager.Dispose();
+
+        Assert.Throws<ObjectDisposedException>(() => jobObjectManager.GetActiveProcessIds());
+    }
 }
