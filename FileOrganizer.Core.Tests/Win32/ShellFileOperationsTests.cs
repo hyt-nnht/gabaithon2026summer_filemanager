@@ -11,15 +11,15 @@ namespace FileOrganizer.Core.Tests.Win32;
 /// 手動確認は <c>FileOrganizer.Core.SmokeTest</c>（<c>--shell-ops</c>モード）を参照。
 /// </summary>
 /// <remarks>
-/// 【既知の環境依存事項】<c>IFileOperation</c> はOSレベルのCOMアクティブ化に依存する。
-/// 一部のPC（セキュリティソフト/グループポリシー/OSビルド起因の可能性がある）では
-/// <c>(IFileOperation)new FileOperation()</c> のQueryInterfaceが <c>E_NOINTERFACE (0x80004002)</c>
-/// で失敗することを確認済み（.NET Core / .NET Framework 双方、バックグラウンドSTAスレッド /
-/// プロセスのメインSTAスレッド双方で再現・切り分け済み。コードの実装起因ではない）。
-/// この場合 <see cref="ShellFileOperations"/> 側の<c>catch { return false; }</c>により
-/// 本クラスの各メソッドは例外を投げず静かに<c>false</c>を返すため、下記テストは
-/// <see cref="Prerequisite_IFileOperationComActivation_IsAvailable"/> の失敗メッセージで
-/// 環境要因である旨を確認したうえで読むこと。
+/// 【修正済みの既知不具合】<c>IID_IFileOperation</c> の <see cref="Guid"/> 属性値に誤りがあり
+/// （末尾が <c>4bf50368389b</c> という誤った値になっていた。正しくは
+/// Microsoft公式ドキュメント「.NET Matters: IFileOperation in Windows Vista」および
+/// 複数の独立したC#/Win32バインディングで確認済みの <c>4bf7836fc9f8</c>）、
+/// <c>(IFileOperation)new FileOperation()</c> のQueryInterfaceが常に <c>E_NOINTERFACE (0x80004002)</c>
+/// で失敗していた。<see cref="ShellFileOperations"/> 側の<c>catch { return false; }</c>により
+/// 例外を投げず静かに<c>false</c>を返すため、環境依存の失敗であるかのように見えていたが、
+/// 実際の原因はGUID誤記であり、OS/セキュリティソフト/グループポリシー等の環境要因ではない。
+/// GUID修正後は本クラスの全テストがPASSする。
 /// </remarks>
 public class ShellFileOperationsTests : IDisposable
 {
@@ -54,12 +54,11 @@ public class ShellFileOperationsTests : IDisposable
     }
 
     /// <summary>
-    /// 前提条件チェック: このマシンでCOM経由の<c>IFileOperation</c>アクティブ化自体が可能かを確認する。
+    /// 前提条件チェック: COM経由の<c>IFileOperation</c>アクティブ化自体が可能かを確認する。
     /// これが失敗する場合、他のテストの失敗（<c>SendToRecycleBinAsync</c>/<c>MoveFileSafelyAsync</c>が
-    /// 例外を投げず<c>false</c>を返す）は<see cref="ShellFileOperations"/>のバグではなく、
-    /// OS/セキュリティソフト等の環境要因によりQueryInterfaceが<c>E_NOINTERFACE</c>で
-    /// 失敗していることが原因である可能性が高い（.NET Core・.NET Framework双方、
-    /// バックグラウンドSTAスレッド・プロセスのメインSTAスレッド双方で同一の失敗を確認済み）。
+    /// 例外を投げず<c>false</c>を返す）はQueryInterfaceが<c>E_NOINTERFACE</c>で失敗していることが原因。
+    /// かつて<c>IID_IFileOperation</c>の<see cref="Guid"/>属性値に誤りがあり常に失敗していたが、
+    /// GUIDを正しい値（947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8）に修正済みで、現在はPASSする。
     /// </summary>
     [Fact]
     public void Prerequisite_IFileOperationComActivation_IsAvailable()
@@ -80,10 +79,9 @@ public class ShellFileOperationsTests : IDisposable
 
         Assert.True(
             activationError is null,
-            "このマシンでは IFileOperation の COMアクティブ化（QueryInterface）が失敗しました。" +
-            "ShellFileOperations.cs（AI_IMPLEMENTATION_GUIDE.md §4.1をそのまま転記したコード）の" +
-            "バグではなく、OS/セキュリティソフト/グループポリシー等の環境要因の可能性が高い" +
-            "（.NET Framework側でも同一の失敗を別途確認済み）。詳細: " + activationError);
+            "IFileOperation の COMアクティブ化（QueryInterface）が失敗しました。" +
+            "IID_IFileOperation の Guid 属性値が正しいか（947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8）を確認すること。" +
+            "詳細: " + activationError);
     }
 
     [Fact]
@@ -265,7 +263,7 @@ public class ShellFileOperationsTests : IDisposable
     }
 
     [ComImport]
-    [Guid("947aab5f-0a5c-4c13-b4d6-4bf50368389b")] // IID_IFileOperation
+    [Guid("947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8")] // IID_IFileOperation
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IFileOperationProbe
     {

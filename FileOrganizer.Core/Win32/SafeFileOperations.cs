@@ -304,7 +304,7 @@ public static class SafeFileOperations
     }
 
     [ComImport]
-    [Guid("947aab5f-0a5c-4c13-b4d6-4bf50368389b")] // IID_IFileOperation
+    [Guid("947aab5f-0a5c-4c13-b4d6-4bf7836fc9f8")] // IID_IFileOperation
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IFileOperationProbe
     {
