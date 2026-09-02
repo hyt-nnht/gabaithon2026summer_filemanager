@@ -24,8 +24,19 @@ public sealed class JobObjectManager : IDisposable
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool QueryInformationJobObject(
+        IntPtr hJob, int JobObjectInfoClass, IntPtr lpJobObjectInfo, uint cbJobObjectInfoLength, out uint lpReturnLength);
+
     private const int JobObjectExtendedLimitInformation = 9;
+    private const int JobObjectBasicProcessIdList = 3;
     private const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000;
+
+    /// <summary>
+    /// <see cref="GetActiveProcessIds"/>が一度に取得できるPID件数の上限。
+    /// Python本体（+稀に孫プロセス）程度を想定した実用上の上限であり、通常の運用では十分な余裕がある。
+    /// </summary>
+    private const int MaxTrackedProcessIds = 64;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct IO_COUNTERS
@@ -103,6 +114,51 @@ public sealed class JobObjectManager : IDisposable
             throw new Win32Exception(error, $"AssignProcessToJobObject に失敗しました（PID={process.Id}）。");
         }
     }
+
+    /// <summary>
+    /// このJob Objectに現在割り当てられている（＝まだ生存している）プロセスのPID一覧を取得する。
+    /// 仕様書§7.2-3のクラッシュ検知（<see cref="PythonProcessManager"/>の
+    /// <c>Process.Exited</c>イベント）を、OS側の実際のジョブ所属状況と突き合わせて誤検知を避けるために使う。
+    /// </summary>
+    /// <exception cref="ObjectDisposedException">Dispose済みの場合。</exception>
+    /// <exception cref="Win32Exception">
+    /// QueryInformationJobObjectがネイティブ側で失敗した場合（<see cref="MaxTrackedProcessIds"/>を超える
+    /// プロセス数が割り当てられている場合を含む）。
+    /// </exception>
+    public IReadOnlyList<int> GetActiveProcessIds()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        int headerSize = sizeof(uint) * 2; // NumberOfAssignedProcesses + NumberOfProcessIdsInList
+        int bufferSize = headerSize + (IntPtr.Size * MaxTrackedProcessIds);
+        IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+        try
+        {
+            if (!QueryInformationJobObject(_jobHandle, JobObjectBasicProcessIdList, buffer, (uint)bufferSize, out _))
+            {
+                int error = Marshal.GetLastWin32Error();
+                throw new Win32Exception(error, "QueryInformationJobObject（JobObjectBasicProcessIdList取得）に失敗しました。");
+            }
+
+            int numberOfProcessIdsInList = Marshal.ReadInt32(buffer, sizeof(uint));
+            var result = new List<int>(numberOfProcessIdsInList);
+            for (int i = 0; i < numberOfProcessIdsInList; i++)
+            {
+                IntPtr pid = Marshal.ReadIntPtr(buffer, headerSize + (i * IntPtr.Size));
+                result.Add((int)pid.ToInt64());
+            }
+
+            return result;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    /// <summary>指定PIDが現在もこのJob Objectに割り当てられている（＝生存している）かどうか。</summary>
+    /// <exception cref="ObjectDisposedException">Dispose済みの場合。</exception>
+    public bool IsProcessActive(int processId) => GetActiveProcessIds().Contains(processId);
 
     public void Dispose()
     {

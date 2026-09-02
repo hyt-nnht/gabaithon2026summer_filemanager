@@ -14,6 +14,15 @@
 //   3) SafeFileOperations（ごみ箱退避・Cross-Volume移動・キャンセル）の疎通確認:
 //        dotnet run --project FileOrganizer.Core.SmokeTest -- --shell-ops [--drive-a <path>] [--drive-b <path>]
 //      --drive-a/--drive-b省略時は起動しているドライブから自動選択する（2台ないとCross-Volumeは検証できない）。
+//
+//   4) 負荷耐性（仕様書§7.2-1）の実測（スレッド数・CPU使用率）:
+//        dotnet run --project FileOrganizer.Core.SmokeTest -- --load-test [--count <N=1000>]
+//          [--stability-interval-ms <ms=750>] [--timeout-seconds <s=60>]
+//
+//   5) 長時間常駐安定性（仕様書§7.2-4）の短時間加速プロキシ計測（150MB絶対値の直接確認。
+//      長時間トレンドの代替にはならない点に注意 -- 詳細はツール内コメント参照）:
+//        dotnet run --project FileOrganizer.Core.SmokeTest -- --memory-soak [--duration-seconds <s=120>]
+//          [--batch-size <n=200>] [--batch-interval-seconds <s=5>]
 
 using System.Diagnostics;
 using FileOrganizer.Core.Client;
@@ -23,6 +32,16 @@ using FileOrganizer.Shared.Models;
 if (args.Length > 0 && args[0] == "--shell-ops")
 {
     return await ShellOpsSmokeTest.RunAsync(args[1..]);
+}
+
+if (args.Length > 0 && args[0] == "--load-test")
+{
+    return await LoadTestSmokeTest.RunAsync(args[1..]);
+}
+
+if (args.Length > 0 && args[0] == "--memory-soak")
+{
+    return await MemorySoakSmokeTest.RunAsync(args[1..]);
 }
 
 var options = SmokeTestOptions.Parse(args);
