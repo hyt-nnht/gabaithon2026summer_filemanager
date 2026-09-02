@@ -67,7 +67,11 @@ public class PythonApiClientSecurityTests
         using var client = new PythonApiClient();
         client.Configure(server.Port, CorrectToken);
 
-        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = @"C:\Demo\sample.pdf" });
+        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest
+        {
+            FilePath = @"C:\Demo\sample.pdf",
+            OcrText = "請求書",
+        });
 
         Assert.NotNull(result);
         Assert.True(result!.Success);
@@ -81,7 +85,11 @@ public class PythonApiClientSecurityTests
         using var client = new PythonApiClient();
         client.Configure(server.Port, WrongToken);
 
-        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = @"C:\Demo\sample.pdf" });
+        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest
+        {
+            FilePath = @"C:\Demo\sample.pdf",
+            OcrText = "請求書",
+        });
 
         Assert.Null(result);
         Assert.Equal(1, server.RejectedRequestCount);

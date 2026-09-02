@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.Collections;
+using System.IO;
+using System.Text.Json;
 using FileOrganizer.Shared.Models;
 using FileOrganizer.UI.Mvvm;
 using FileOrganizer.UI.Services;
@@ -101,18 +104,21 @@ public sealed class RulesViewModel : ObservableObject
 
     private void AddRule()
     {
+        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string watchFolder = Path.Combine(userProfile, "Downloads");
+        string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var model = new RuleModel
         {
             Name = "新しい整理ルール",
             Enabled = true,
-            WatchFolder = @"C:\Users\demo\Downloads",
+            WatchFolder = watchFolder,
             Conditions = new List<RuleCondition>
             {
                 new() { Type = "extension", Operator = "equals", Value = ".pdf" }
             },
             Actions = new List<RuleAction>
             {
-                new() { Type = "move", Destination = @"C:\Users\demo\Documents" }
+                new() { Type = "move", Destination = documents }
             }
         };
         var item = new RuleItemViewModel(model);
@@ -299,7 +305,7 @@ public sealed class ConditionEditorViewModel : ObservableObject
     {
         _type = model.Type;
         _operator = model.Operator;
-        _value = model.Value?.ToString() ?? string.Empty;
+        _value = FormatValueForEditor(model.Value);
     }
 
     public static IReadOnlyList<SelectionOption> TypeOptions { get; } = new[]
@@ -326,7 +332,31 @@ public sealed class ConditionEditorViewModel : ObservableObject
     public string Operator { get => _operator; set => SetProperty(ref _operator, value); }
     public string Value { get => _value; set => SetProperty(ref _value, value); }
 
-    public RuleCondition ToModel() => new() { Type = Type, Operator = Operator, Value = Value.Trim() };
+    public RuleCondition ToModel()
+    {
+        string trimmed = Value.Trim();
+        object value = Operator == "in"
+            ? trimmed.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            : trimmed;
+
+        return new RuleCondition { Type = Type, Operator = Operator, Value = value };
+    }
+
+    private static string FormatValueForEditor(object? value)
+    {
+        if (value is null) return string.Empty;
+        if (value is string text) return text;
+        if (value is JsonElement { ValueKind: JsonValueKind.Array } jsonArray)
+        {
+            return string.Join(", ", jsonArray.EnumerateArray().Select(item =>
+                item.ValueKind == JsonValueKind.String ? item.GetString() : item.GetRawText()));
+        }
+        if (value is IEnumerable values)
+        {
+            return string.Join(", ", values.Cast<object?>().Select(item => item?.ToString() ?? string.Empty));
+        }
+        return value.ToString() ?? string.Empty;
+    }
 }
 
 public sealed class ActionEditorViewModel : ObservableObject

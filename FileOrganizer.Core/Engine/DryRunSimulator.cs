@@ -58,23 +58,31 @@ public sealed class DryRunPlanEntry
 /// </summary>
 /// <remarks>
 /// <see cref="ProcessingCoordinator"/>と同じ「1ルール内の複数アクションを順に適用し、
-/// Move/Renameで対象パスを更新、Copyは据え置き、Recycle/確認要求/スキップで打ち切り」という
+/// Move/Renameで対象パスを更新、Copy/衝突スキップは据え置き、Recycle/確認要求で打ち切り」という
 /// アクション連鎖ロジックを、実I/Oを伴わない形で再現する。
 /// </remarks>
 public sealed class DryRunSimulator
 {
     private readonly IRuleEngine _ruleEngine;
     private readonly ConflictPolicy _defaultConflictPolicy;
+    private readonly IOcrService? _ocrService;
+    private readonly IPythonApiClient? _pythonApiClient;
 
     /// <param name="ruleEngine">1-7 ルール評価エンジン（<see cref="RuleEvaluator"/>）。</param>
     /// <param name="defaultConflictPolicy">
     /// Move/Copyの同名衝突解決に使う既定ポリシー。実運用（<see cref="ProcessingCoordinator"/>）と
     /// 同じ値を渡すことで、実行結果と一致するシミュレーションになる。既定は<see cref="ConflictPolicy.AutoRename"/>。
     /// </param>
-    public DryRunSimulator(IRuleEngine ruleEngine, ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename)
+    public DryRunSimulator(
+        IRuleEngine ruleEngine,
+        ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename,
+        IOcrService? ocrService = null,
+        IPythonApiClient? pythonApiClient = null)
     {
         _ruleEngine = ruleEngine ?? throw new ArgumentNullException(nameof(ruleEngine));
         _defaultConflictPolicy = defaultConflictPolicy;
+        _ocrService = ocrService;
+        _pythonApiClient = pythonApiClient;
     }
 
     /// <summary>
@@ -82,7 +90,7 @@ public sealed class DryRunSimulator
     /// 隠し/システムファイル・シンボリックリンク・<c>.lnk</c>は除外）、<see cref="Simulate"/>を行う。
     /// 「今すぐ整理（Dry Run）」のUIから、既存ファイル一括分の差分プレビューを得る想定のエントリポイント。
     /// </summary>
-    public Task<IReadOnlyList<DryRunPlanEntry>> SimulateFolderAsync(
+    public async Task<IReadOnlyList<DryRunPlanEntry>> SimulateFolderAsync(
         string folderPath,
         bool includeSubdirectories,
         IReadOnlyList<RuleModel> rules,
@@ -94,7 +102,7 @@ public sealed class DryRunSimulator
 
         if (!Directory.Exists(folderPath))
         {
-            return Task.FromResult<IReadOnlyList<DryRunPlanEntry>>(Array.Empty<DryRunPlanEntry>());
+            return Array.Empty<DryRunPlanEntry>();
         }
 
         var enumerationOptions = new EnumerationOptions
@@ -124,7 +132,34 @@ public sealed class DryRunSimulator
             });
         }
 
-        return Task.FromResult(Simulate(metadataList, rules, applyAllMatchingRules));
+        return await SimulateFilesAsync(metadataList, rules, applyAllMatchingRules, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Drop Zone等で指定されたファイルだけをプレビューする。AI条件がある場合は実処理と同じく
+    /// C# OCRで本文を得てPythonへ本文だけを渡す（Pythonは<c>FilePath</c>を開かない）。
+    /// </summary>
+    public async Task<IReadOnlyList<DryRunPlanEntry>> SimulateFilesAsync(
+        IEnumerable<FileMetadata> files,
+        IReadOnlyList<RuleModel> rules,
+        bool applyAllMatchingRules,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(files);
+        ArgumentNullException.ThrowIfNull(rules);
+
+        var entries = new List<DryRunPlanEntry>();
+        bool needsAnalysis = RequiresAiEnrichment(rules);
+        foreach (FileMetadata metadata in files)
+        {
+            ct.ThrowIfCancellationRequested();
+            AnalyzeResponse? analysis = needsAnalysis
+                ? await TryEnrichAsync(metadata, ct).ConfigureAwait(false)
+                : null;
+            entries.Add(SimulateOne(metadata, rules, applyAllMatchingRules, analysis));
+        }
+
+        return entries;
     }
 
     /// <summary>
@@ -143,32 +178,41 @@ public sealed class DryRunSimulator
 
         foreach (var metadata in files)
         {
-            var evaluation = _ruleEngine.Evaluate(metadata, rules, applyAllMatchingRules);
-            if (!evaluation.IsMatched)
-            {
-                entries.Add(new DryRunPlanEntry { SourcePath = metadata.FullPath, IsMatched = false });
-                continue;
-            }
-
-            IReadOnlyList<RuleModel> rulesToApply = applyAllMatchingRules
-                ? evaluation.AllMatchedRules
-                : new List<RuleModel> { evaluation.MatchedRule! };
-
-            var actions = SimulateActionChain(metadata.FullPath, rulesToApply);
-
-            entries.Add(new DryRunPlanEntry
-            {
-                SourcePath = metadata.FullPath,
-                IsMatched = true,
-                MatchedRuleName = rulesToApply.Count > 0 ? rulesToApply[0].Name : null,
-                Actions = actions,
-            });
+            entries.Add(SimulateOne(metadata, rules, applyAllMatchingRules, analysis: null));
         }
 
         return entries;
     }
 
-    private List<DryRunActionPlan> SimulateActionChain(string startPath, IReadOnlyList<RuleModel> rulesToApply)
+    private DryRunPlanEntry SimulateOne(
+        FileMetadata metadata,
+        IReadOnlyList<RuleModel> rules,
+        bool applyAllMatchingRules,
+        AnalyzeResponse? analysis)
+    {
+        RuleEvaluationResult evaluation = _ruleEngine.Evaluate(metadata, rules, applyAllMatchingRules);
+        if (!evaluation.IsMatched)
+        {
+            return new DryRunPlanEntry { SourcePath = metadata.FullPath, IsMatched = false };
+        }
+
+        IReadOnlyList<RuleModel> rulesToApply = applyAllMatchingRules
+            ? evaluation.AllMatchedRules
+            : new List<RuleModel> { evaluation.MatchedRule! };
+
+        return new DryRunPlanEntry
+        {
+            SourcePath = metadata.FullPath,
+            IsMatched = true,
+            MatchedRuleName = rulesToApply.Count > 0 ? rulesToApply[0].Name : null,
+            Actions = SimulateActionChain(metadata.FullPath, rulesToApply, analysis),
+        };
+    }
+
+    private List<DryRunActionPlan> SimulateActionChain(
+        string startPath,
+        IReadOnlyList<RuleModel> rulesToApply,
+        AnalyzeResponse? analysis)
     {
         var results = new List<DryRunActionPlan>();
         string currentPath = startPath;
@@ -177,15 +221,21 @@ public sealed class DryRunSimulator
         {
             foreach (var action in rule.Actions)
             {
-                var plan = SimulateAction(currentPath, action);
+                var plan = SimulateAction(currentPath, action, analysis);
                 if (plan is null) continue; // 未知のaction typeは無視
 
                 results.Add(plan);
 
-                if (plan.WillSkip || plan.RequiresConfirmation)
+                if (plan.RequiresConfirmation)
                 {
                     // 実行時の分岐が確定できないため、このファイルに対する以降の予測は打ち切る。
                     return results;
+                }
+
+                if (plan.WillSkip)
+                {
+                    // ProcessingCoordinator同様、意図的スキップは元パスのまま後続へ進む。
+                    continue;
                 }
 
                 if (plan.OpType == OperationType.Recycle)
@@ -205,7 +255,7 @@ public sealed class DryRunSimulator
         return results;
     }
 
-    private DryRunActionPlan? SimulateAction(string currentPath, RuleAction action)
+    private DryRunActionPlan? SimulateAction(string currentPath, RuleAction action, AnalyzeResponse? analysis)
     {
         if (!TryMapOperationType(action.Type, out OperationType opType))
         {
@@ -215,7 +265,7 @@ public sealed class DryRunSimulator
         return opType switch
         {
             OperationType.Move or OperationType.Copy => SimulateMoveOrCopy(currentPath, action, opType),
-            OperationType.Rename => SimulateRename(currentPath, action),
+            OperationType.Rename => SimulateRename(currentPath, action, analysis),
             OperationType.Recycle => new DryRunActionPlan { OpType = OperationType.Recycle, SourcePath = currentPath },
             _ => null,
         };
@@ -254,16 +304,15 @@ public sealed class DryRunSimulator
         };
     }
 
-    private static DryRunActionPlan SimulateRename(string currentPath, RuleAction action)
+    private DryRunActionPlan SimulateRename(string currentPath, RuleAction action, AnalyzeResponse? analysis)
     {
         if (string.IsNullOrWhiteSpace(action.Pattern))
         {
             return new DryRunActionPlan { OpType = OperationType.Rename, SourcePath = currentPath, RequiresConfirmation = true };
         }
 
-        // Phase1時点ではPatternをそのまま新ファイル名として使用する
-        // （プレースホルダー展開はPhase2、ProcessingCoordinatorと同一の扱い）。
-        string sanitized = PathSanitizer.SanitizeFileName(action.Pattern);
+        string expanded = RenamePatternExpander.Expand(action.Pattern, currentPath, analysis);
+        string sanitized = PathSanitizer.SanitizeFileName(expanded);
 
         string? directory = Path.GetDirectoryName(currentPath);
         if (string.IsNullOrEmpty(directory))
@@ -272,15 +321,39 @@ public sealed class DryRunSimulator
         }
 
         string candidatePath = Path.Combine(directory, sanitized);
-
-        // Undo同様、リネームは自動別名復元を行わない仕様（§3.2）に合わせ、
-        // 衝突時は常に要確認とする（大文字小文字のみの変更は自分自身なので衝突として扱わない）。
         bool isSelf = string.Equals(candidatePath, currentPath, StringComparison.OrdinalIgnoreCase);
-        bool conflict = !isSelf && (File.Exists(candidatePath) || Directory.Exists(candidatePath));
+        if (isSelf)
+        {
+            return new DryRunActionPlan
+            {
+                OpType = OperationType.Rename,
+                SourcePath = currentPath,
+                PlannedDestinationPath = candidatePath,
+            };
+        }
 
-        return conflict
-            ? new DryRunActionPlan { OpType = OperationType.Rename, SourcePath = currentPath, RequiresConfirmation = true }
-            : new DryRunActionPlan { OpType = OperationType.Rename, SourcePath = currentPath, PlannedDestinationPath = candidatePath };
+        ConflictResolution resolution = ConflictResolver.Resolve(directory, sanitized, _defaultConflictPolicy);
+        return resolution.Outcome switch
+        {
+            ConflictResolutionOutcome.NoConflict or ConflictResolutionOutcome.Resolved => new DryRunActionPlan
+            {
+                OpType = OperationType.Rename,
+                SourcePath = currentPath,
+                PlannedDestinationPath = Path.Combine(directory, resolution.ResolvedFileName!),
+            },
+            ConflictResolutionOutcome.Skip => new DryRunActionPlan
+            {
+                OpType = OperationType.Rename,
+                SourcePath = currentPath,
+                WillSkip = true,
+            },
+            _ => new DryRunActionPlan
+            {
+                OpType = OperationType.Rename,
+                SourcePath = currentPath,
+                RequiresConfirmation = true,
+            },
+        };
     }
 
     private static bool TryMapOperationType(string actionType, out OperationType opType)
@@ -293,5 +366,63 @@ public sealed class DryRunSimulator
             case "recycle": opType = OperationType.Recycle; return true;
             default: opType = default; return false;
         }
+    }
+
+    private static bool RequiresAiEnrichment(IReadOnlyList<RuleModel> rules)
+        => rules.Any(rule => rule.Enabled &&
+            (rule.Conditions.Any(condition => condition.Type is "ocr_contains" or "ai_category") ||
+             rule.Actions.Any(action => action.Type.Equals("rename", StringComparison.OrdinalIgnoreCase) &&
+                 (action.Pattern?.Contains("{category}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{date}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{company}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{document_type}", StringComparison.OrdinalIgnoreCase) == true))));
+
+    private async Task<AnalyzeResponse?> TryEnrichAsync(FileMetadata metadata, CancellationToken ct)
+    {
+        if (_ocrService is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!await _ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
+            {
+                return null;
+            }
+
+            string? text = await _ocrService.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            metadata.OcrText = text;
+            if (_pythonApiClient is null)
+            {
+                return null;
+            }
+            AnalyzeResponse? response = await _pythonApiClient.AnalyzeAsync(new AnalyzeRequest
+            {
+                // Pythonでは表示・拡張子推定用メタデータ。通常IPCでこのパスを開いてはならない。
+                FilePath = metadata.FullPath,
+                OcrText = text.Length <= AnalyzeRequest.MaxOcrTextLength
+                    ? text
+                    : text[..AnalyzeRequest.MaxOcrTextLength],
+                ExtractFields = ["date", "company", "document_type", "category"],
+            }, ct).ConfigureAwait(false);
+
+            if (response?.Success == true)
+            {
+                metadata.AiCategory = response.Category;
+                return response;
+            }
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // OCR/AI失敗時はファイル名等の基本ルールへgracefulに退避する。
+        }
+
+        return null;
     }
 }

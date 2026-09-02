@@ -49,13 +49,15 @@ public sealed class PythonServiceDegradedEventArgs : EventArgs
 /// 他の呼び出しは新しいプロセスに対して再試行する。
 /// </para>
 /// </remarks>
-public sealed class PythonServiceSupervisor : IAsyncDisposable
+public sealed class PythonServiceSupervisor : IPythonApiClient, IAsyncDisposable
 {
     private readonly Func<PythonProcessManager> _processManagerFactory;
     private readonly IPythonApiClient _apiClient;
     private readonly SemaphoreSlim _respawnLock = new(1, 1);
 
     private PythonProcessManager? _currentManager;
+    private AppSettings? _startupSettings;
+    private ModelDownloadManager? _modelDownloadManager;
     private bool _disposed;
 
     /// <summary>連続失敗としてカウントされた回数（成功のたびに0へリセット）。診断・UI表示用。</summary>
@@ -98,6 +100,9 @@ public sealed class PythonServiceSupervisor : IAsyncDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        _startupSettings = null;
+        _modelDownloadManager = null;
+
         PythonProcessManager manager = _processManagerFactory();
         PythonHandshakeResult handshake;
         try
@@ -116,8 +121,9 @@ public sealed class PythonServiceSupervisor : IAsyncDisposable
 
     /// <summary>
     /// SLM事前配置モデル統合版の起動（<see cref="PythonProcessManager.StartAsync(AppSettings, ModelDownloadManager, IProgress{double}?, CancellationToken)"/>）。
-    /// 初回起動時のみ使用し、リスポーン時はモデル確認/ダウンロードを再度行わない
-    /// （モデルは初回起動時に既にディスク上へ確定済みのため、DL待ち時間ゼロ化の趣旨に反しない）。
+    /// 初回起動とリスポーンの双方で同じ設定を使用する。リスポーン時の確認はローカルファイルの
+    /// 存在・サイズ確認だけで、初回に配置済みなら再ダウンロードは発生しない。これにより
+    /// <c>ANALYZER_SLM_MODEL</c>を再起動後の子プロセスにも確実に引き継ぐ。
     /// </summary>
     public async Task<PythonHandshakeResult> StartAsync(
         AppSettings settings,
@@ -126,6 +132,13 @@ public sealed class PythonServiceSupervisor : IAsyncDisposable
         CancellationToken ct = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentNullException.ThrowIfNull(settings);
+        ArgumentNullException.ThrowIfNull(modelDownloadManager);
+
+        // リスポーン後も初回と同じモデル設定を子プロセスへ渡すため保持する。
+        // OCR本文やファイル内容は保持しない。
+        _startupSettings = settings;
+        _modelDownloadManager = modelDownloadManager;
 
         PythonProcessManager manager = _processManagerFactory();
         PythonHandshakeResult handshake;
@@ -152,6 +165,14 @@ public sealed class PythonServiceSupervisor : IAsyncDisposable
 
     private void OnManagerProcessCrashed(object? sender, PythonProcessCrashedEventArgs e)
         => ProcessCrashed?.Invoke(this, e);
+
+    /// <summary>
+    /// <see cref="IPythonApiClient"/>としてDIできるようにするための互換メソッド。
+    /// Supervisor自身が起動ハンドシェイク結果を管理するので、通常のComposition Rootから
+    /// このメソッドを直接呼ぶ必要はない。
+    /// </summary>
+    public void Configure(int port, string bearerToken)
+        => _apiClient.Configure(port, bearerToken);
 
     /// <summary>
     /// <see cref="IPythonApiClient.HealthCheckAsync"/>を、失敗時の自動リスポーン＋1回再試行付きで呼び出す。
@@ -243,7 +264,9 @@ public sealed class PythonServiceSupervisor : IAsyncDisposable
             PythonHandshakeResult handshake;
             try
             {
-                handshake = await newManager.StartAsync(ct).ConfigureAwait(false);
+                handshake = _startupSettings is not null && _modelDownloadManager is not null
+                    ? await newManager.StartAsync(_startupSettings, _modelDownloadManager, null, ct).ConfigureAwait(false)
+                    : await newManager.StartAsync(ct).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

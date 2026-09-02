@@ -90,6 +90,7 @@ public sealed class DebouncedWatcher : IDisposable
 
     /// <summary>デバウンス確定後のパスを受け取るチャンネル読み取り口。</summary>
     public ChannelReader<string> SettledPaths => _channel.Reader;
+    public int PendingCount => _queue.PendingCount;
 
     public string WatchFolder { get; }
 
@@ -114,6 +115,7 @@ public sealed class DebouncedWatcher : IDisposable
         };
         _watcher.Created += OnRawEvent;
         _watcher.Changed += OnRawEvent;
+        _watcher.Renamed += OnRawEvent;
         _watcher.Error += OnWatcherError;
 
         // ファイルごとのTimerではなく、単一の集約ループでデバウンスキューを定期フラッシュする。
@@ -159,6 +161,7 @@ public sealed class DebouncedWatcher : IDisposable
         _watcher.EnableRaisingEvents = false;
         _watcher.Created -= OnRawEvent;
         _watcher.Changed -= OnRawEvent;
+        _watcher.Renamed -= OnRawEvent;
         _watcher.Error -= OnWatcherError;
         _watcher.Dispose();
 

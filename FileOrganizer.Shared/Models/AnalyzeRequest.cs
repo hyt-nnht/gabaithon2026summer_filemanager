@@ -7,11 +7,14 @@ namespace FileOrganizer.Shared.Models;
 /// </summary>
 public class AnalyzeRequest
 {
+    public const int MaxOcrTextLength = 100_000;
+    /// <summary>元ファイルの表示名・拡張子をPythonへ伝えるメタデータ。Pythonはこのパスを開かない。</summary>
     [JsonPropertyName("file_path")]
     public string FilePath { get; set; } = string.Empty;
 
+    /// <summary>C#のWindows OCRで抽出した本文。通常IPCでは必須。</summary>
     [JsonPropertyName("ocr_text")]
-    public string? OcrText { get; set; }
+    public string OcrText { get; set; } = string.Empty;
 
     [JsonPropertyName("extract_fields")]
     public List<string> ExtractFields { get; set; } = new();

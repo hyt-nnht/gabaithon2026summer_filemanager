@@ -87,14 +87,12 @@ class IpcContractTests(unittest.TestCase):
             UnusedSlm(),  # type: ignore[arg-type]
         )
 
-        with patch.object(coordinator, "_validate_file", return_value=Path("invoice.pdf")):
-            result = coordinator.analyze(
+        with patch.object(coordinator, "_validate_file", side_effect=AssertionError("must not validate file")):
+            result = coordinator.analyze_text(
                 job_id="ipc",
-                file_path="invoice.pdf",
-                expected_size=None,
-                expected_last_write_utc=None,
+                file_path=r"Z:\outside\does-not-exist\invoice.pdf",
                 analysis_mode="rules_only",
-                provided_ocr_text="請求書\n発行元: サンプル株式会社\n2026年8月25日",
+                ocr_text="請求書\n発行元: サンプル株式会社\n2026年8月25日",
             )
 
         self.assertEqual("provided_ocr_text", result["extraction"]["source"])

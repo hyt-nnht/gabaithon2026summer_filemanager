@@ -315,12 +315,12 @@ public sealed class ProcessingCoordinator
         {
             OperationType.Move => _fileOperationService.MoveAsync(currentPath, RequireDestination(action), _defaultConflictPolicy, ct),
             OperationType.Copy => _fileOperationService.CopyAsync(currentPath, RequireDestination(action), _defaultConflictPolicy, ct),
-            // Phase2: AI解析結果（category/metadata）によるプレースホルダー展開（ExpandRenamePattern）を
+            // AI解析結果（category/metadata）とファイル由来変数によるプレースホルダー展開を
             // 適用した上で新ファイル名として使用する。analyzeResponseがnull（AI解析未実行/失敗）の場合は
             // Phase1と同じくPatternをそのまま使用する。禁止文字・末尾ドット等のサニタイズは
             // FileOperationService.RenameAsync側で必ず行われる。
             OperationType.Rename => _fileOperationService.RenameAsync(
-                currentPath, ExpandRenamePattern(RequirePattern(action), analyzeResponse), ct),
+                currentPath, RenamePatternExpander.Expand(RequirePattern(action), currentPath, analyzeResponse), ct),
             OperationType.Recycle => _fileOperationService.RecycleAsync(currentPath, ct),
             _ => throw new InvalidOperationException($"未対応のOperationTypeです: {opType}"),
         };
@@ -343,7 +343,7 @@ public sealed class ProcessingCoordinator
             ? Path.Combine(action.Destination, Path.GetFileName(currentPath))
             : null,
         OperationType.Rename => !string.IsNullOrWhiteSpace(action.Pattern)
-            ? Path.Combine(Path.GetDirectoryName(currentPath) ?? string.Empty, ExpandRenamePattern(action.Pattern, analyzeResponse))
+            ? Path.Combine(Path.GetDirectoryName(currentPath) ?? string.Empty, RenamePatternExpander.Expand(action.Pattern, currentPath, analyzeResponse))
             : null,
         _ => null, // Recycleに移動先の概念はない
     };
@@ -368,7 +368,13 @@ public sealed class ProcessingCoordinator
 
     /// <summary><paramref name="rules"/>に、OCR/AI解析を必要とする条件を持つ有効ルールが1件でもあるかを判定する。</summary>
     private static bool RequiresAiEnrichment(IReadOnlyList<RuleModel> rules)
-        => rules.Any(r => r.Enabled && r.Conditions.Any(c => c.Type is "ocr_contains" or "ai_category"));
+        => rules.Any(rule => rule.Enabled &&
+            (rule.Conditions.Any(condition => condition.Type is "ocr_contains" or "ai_category") ||
+             rule.Actions.Any(action => action.Type.Equals("rename", StringComparison.OrdinalIgnoreCase) &&
+                 (action.Pattern?.Contains("{category}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{date}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{company}", StringComparison.OrdinalIgnoreCase) == true ||
+                  action.Pattern?.Contains("{document_type}", StringComparison.OrdinalIgnoreCase) == true))));
 
     /// <summary>
     /// Phase2 OCR/AI解析パイプライン: 2-1 <c>PdfToBitmapRenderer</c> → 2-2 <c>WindowsMediaOcrService</c>
@@ -404,9 +410,9 @@ public sealed class ProcessingCoordinator
     /// </remarks>
     private async Task<AnalyzeResponse?> EnrichWithAiMetadataAsync(FileMetadata metadata, CancellationToken ct)
     {
-        if (_ocrService is null || _pythonApiClient is null)
+        if (_ocrService is null)
         {
-            // Phase2依存先が未構成（DI未設定）→ gracefulにルールベースへ委ねる。
+            // OCR依存先が未構成 → ファイル名等の基本ルールへ委ねる。
             return null;
         }
 
@@ -440,10 +446,18 @@ public sealed class ProcessingCoordinator
         // ocr_contains条件はOCR全文そのものへの一致判定のため、Python解析の成否に関わらずここで設定する。
         metadata.OcrText = ocrText;
 
+        if (_pythonApiClient is null)
+        {
+            // Pythonが起動できない環境でもC# OCRだけでocr_contains条件は利用できる。
+            return null;
+        }
+
         var request = new AnalyzeRequest
         {
             FilePath = metadata.FullPath,
-            OcrText = ocrText,
+            OcrText = ocrText.Length <= AnalyzeRequest.MaxOcrTextLength
+                ? ocrText
+                : ocrText[..AnalyzeRequest.MaxOcrTextLength],
             ExtractFields = DefaultExtractFields,
         };
 
@@ -489,37 +503,4 @@ public sealed class ProcessingCoordinator
     /// 展開後の禁止文字・末尾ドット等のサニタイズは<see cref="Services.FileOperationService.RenameAsync"/>
     /// 側で必ず行われるため、ここでは行わない。
     /// </summary>
-    private static string ExpandRenamePattern(string pattern, AnalyzeResponse? analyzeResponse)
-    {
-        if (analyzeResponse is null)
-        {
-            return pattern;
-        }
-
-        string expanded = pattern;
-
-        if (!string.IsNullOrEmpty(analyzeResponse.Category))
-        {
-            expanded = ReplacePlaceholder(expanded, "category", analyzeResponse.Category);
-        }
-
-        if (analyzeResponse.Metadata is not null)
-        {
-            foreach (var (key, value) in analyzeResponse.Metadata)
-            {
-                expanded = ReplacePlaceholder(expanded, key, value);
-            }
-        }
-
-        return expanded;
-    }
-
-    private static string ReplacePlaceholder(string source, string key, string? value)
-    {
-        if (string.IsNullOrEmpty(key) || value is null)
-        {
-            return source;
-        }
-        return source.Replace("{" + key + "}", value, StringComparison.OrdinalIgnoreCase);
-    }
 }

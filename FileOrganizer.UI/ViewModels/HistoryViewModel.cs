@@ -20,13 +20,13 @@ public sealed class HistoryViewModel : ObservableObject
         _showMessage = showMessage;
         Filters = new[] { "すべて", "完了", "失敗", "復元済み" };
         UndoCommand = new AsyncRelayCommand(UndoAsync, parameter => parameter is HistoryItemViewModel { CanUndo: true });
-        RefreshCommand = new RelayCommand(ApplyFilter);
+        RefreshCommand = new AsyncRelayCommand(RefreshAsync);
     }
 
     public ObservableCollection<HistoryItemViewModel> Items { get; } = new();
     public IReadOnlyList<string> Filters { get; }
     public AsyncRelayCommand UndoCommand { get; }
-    public RelayCommand RefreshCommand { get; }
+    public AsyncRelayCommand RefreshCommand { get; }
 
     public string SearchText
     {
@@ -55,6 +55,18 @@ public sealed class HistoryViewModel : ObservableObject
         _allItems.Clear();
         _allItems.AddRange(records.Select(record => new HistoryItemViewModel(record)));
         ApplyFilter();
+    }
+
+    public async Task RefreshAsync()
+    {
+        try
+        {
+            Load(await _gateway.LoadHistoryAsync());
+        }
+        catch (Exception ex)
+        {
+            _showMessage($"履歴を更新できませんでした: {ex.Message}");
+        }
     }
 
     private void ApplyFilter()
@@ -93,7 +105,7 @@ public sealed class HistoryViewModel : ObservableObject
             var result = await _gateway.UndoAsync(item.Id);
             _showMessage(result.Message ?? "復元処理が完了しました。");
             if (result.Outcome == UndoOutcome.Success)
-                item.State = OperationState.Undone;
+                await RefreshAsync();
         }
         catch (Exception ex)
         {

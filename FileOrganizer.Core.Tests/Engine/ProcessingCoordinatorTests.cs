@@ -450,6 +450,24 @@ public class ProcessingCoordinatorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessAsync_Python未接続でもCSharpOCRのocr_containsルールは利用できる()
+    {
+        string sourcePath = CreateSourceFile("invoice-local.pdf");
+        var settings = new FakeSettingsRepository
+        {
+            Rules = { CreateRule("OCRだけで分類", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir)) },
+        };
+        var ocr = new FakeOcrService { OcrTextToReturn = "請求書 2026年8月25日" };
+        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: null);
+
+        var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(1, ocr.ExtractTextCallCount);
+        Assert.True(File.Exists(Path.Combine(_destDir, "invoice-local.pdf")));
+    }
+
+    [Fact]
     public async Task ProcessAsync_ai_categoryルールがPython解析結果に一致すればリネームpatternのプレースホルダーが展開される()
     {
         string sourcePath = CreateSourceFile("scan.pdf");

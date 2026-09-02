@@ -78,6 +78,43 @@ public class PythonServiceSupervisorTests
     }
 
     [Fact]
+    public async Task HealthCheckAsync_統合起動後のリスポーンでもSlmModel環境変数を引き継ぐ()
+    {
+        using var jobObjectManager = new JobObjectManager();
+        var apiClient = new FakePythonApiClient();
+        apiClient.EnqueueHealthCheckResult(false);
+        apiClient.EnqueueHealthCheckResult(true);
+
+        string directory = Path.Combine(Path.GetTempPath(), "FileOrganizerTests", "PythonServiceSupervisor", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string modelPath = Path.Combine(directory, "model.gguf");
+        string envDumpPath = Path.Combine(directory, "model-path.txt");
+        using (var stream = new FileStream(modelPath, FileMode.Create))
+        {
+            stream.SetLength(ModelDownloadManager.ExpectedModelSizeBytes);
+        }
+
+        try
+        {
+            using var modelDownloadManager = new ModelDownloadManager();
+            await using var supervisor = new PythonServiceSupervisor(
+                () => CreateManager(jobObjectManager, "-Port", "55167", "-EnvDumpPath", envDumpPath),
+                apiClient);
+            var settings = new AppSettings { UsePreloadedSlmModel = true, SlmModelPath = modelPath };
+
+            await supervisor.StartAsync(settings, modelDownloadManager);
+            Assert.True(await supervisor.HealthCheckAsync());
+
+            Assert.Equal(modelPath, (await File.ReadAllTextAsync(envDumpPath)).Trim());
+            Assert.Equal(2, apiClient.ConfigureCalls.Count);
+        }
+        finally
+        {
+            try { Directory.Delete(directory, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public async Task HealthCheckAsync_リスポーン後も失敗が続く場合はServiceDegradedを発火する()
     {
         using var jobObjectManager = new JobObjectManager();

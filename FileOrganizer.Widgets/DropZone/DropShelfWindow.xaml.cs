@@ -49,6 +49,13 @@ public partial class DropShelfWindow : Window
 
         foreach (string path in paths)
         {
+            if (!File.Exists(path) || string.Equals(Path.GetExtension(path), ".lnk", StringComparison.OrdinalIgnoreCase))
+                continue;
+            FileAttributes attributes;
+            try { attributes = File.GetAttributes(path); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { continue; }
+            if ((attributes & (FileAttributes.Hidden | FileAttributes.System | FileAttributes.ReparsePoint)) != 0)
+                continue;
             if (DroppedFiles.Any(item => string.Equals(item.FullPath, path, StringComparison.OrdinalIgnoreCase)))
                 continue;
             DroppedFiles.Add(new DroppedFileItem(path));
@@ -68,7 +75,11 @@ public partial class DropShelfWindow : Window
         if (DroppedFiles.Count == 0)
             return;
 
-        FilesSubmitted?.Invoke(this, new DroppedFilesSubmittedEventArgs(DroppedFiles.Select(item => item.FullPath).ToArray()));
+        string[] paths = DroppedFiles.Select(item => item.FullPath).ToArray();
+        Hide();
+        FilesSubmitted?.Invoke(this, new DroppedFilesSubmittedEventArgs(paths));
+        DroppedFiles.Clear();
+        UpdateStateVisibility();
     }
 
     private void OnCloseClicked(object sender, RoutedEventArgs e) => Hide();

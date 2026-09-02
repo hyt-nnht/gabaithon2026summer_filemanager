@@ -14,6 +14,13 @@ public sealed class DesignTimeBackendGateway : IFrontendBackendGateway
     private List<RuleModel> _rules = CreateRules();
 
     public bool IsBackendConnected => false;
+    // デザイン時Gatewayはバックエンドイベントを発生させないため、購読だけを受け入れる。
+    // 自動生成フィールドを持たせないことで、未使用イベント警告（CS0067）も避ける。
+    public event EventHandler<BackendActivityEventArgs>? ActivityOccurred
+    {
+        add { }
+        remove { }
+    }
 
     public Task<FrontendSnapshot> LoadAsync(CancellationToken ct = default)
     {
@@ -59,30 +66,39 @@ public sealed class DesignTimeBackendGateway : IFrontendBackendGateway
             new DryRunPreviewItem
             {
                 SourcePath = Path.Combine(folderPath, "scan_0042.pdf"),
-                DestinationPath = @"C:\Users\demo\Documents\請求書\2026-08-25_テックサプライ_請求書.pdf",
                 RuleName = "請求書を会社別に整理",
-                OperationType = OperationType.Move,
+                Actions = [new DryRunPreviewAction { OperationType = OperationType.Move, DestinationPath = @"C:\Users\demo\Documents\請求書\2026-08-25_テックサプライ_請求書.pdf" }],
                 Note = "OCR → ローカルAIの命名候補"
             },
             new DryRunPreviewItem
             {
                 SourcePath = Path.Combine(folderPath, "IMG_3821.jpg"),
-                DestinationPath = @"C:\Users\demo\Pictures\Screenshots\IMG_3821.jpg",
                 RuleName = "画像を種類別に整理",
-                OperationType = OperationType.Move,
+                Actions = [new DryRunPreviewAction { OperationType = OperationType.Move, DestinationPath = @"C:\Users\demo\Pictures\Screenshots\IMG_3821.jpg" }],
                 Note = "拡張子ルール"
             },
             new DryRunPreviewItem
             {
                 SourcePath = Path.Combine(folderPath, "meeting-notes.txt"),
-                DestinationPath = @"C:\Users\demo\Documents\Notes\meeting-notes.txt",
                 RuleName = "テキストメモ",
-                OperationType = OperationType.Copy,
-                RequiresConfirmation = true,
+                Actions = [new DryRunPreviewAction { OperationType = OperationType.Copy, DestinationPath = @"C:\Users\demo\Documents\Notes\meeting-notes.txt", RequiresConfirmation = true }],
                 Note = "同名ファイルあり（実行前に連番を再確認）"
             }
         };
         return Task.FromResult(result);
+    }
+
+    public Task<IReadOnlyList<DryRunPreviewItem>> PreviewFilesAsync(IReadOnlyList<string> filePaths, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        string folder = filePaths.Count > 0 ? Path.GetDirectoryName(filePaths[0]) ?? string.Empty : string.Empty;
+        return PreviewCleanupAsync(folder, ct);
+    }
+
+    public Task<IReadOnlyList<HistoryRecord>> LoadHistoryAsync(CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        return Task.FromResult(CreateHistory());
     }
 
     public Task<FrontendActionResult> ExecuteCleanupAsync(IReadOnlyList<DryRunPreviewItem> approvedItems, CancellationToken ct = default)
@@ -108,6 +124,8 @@ public sealed class DesignTimeBackendGateway : IFrontendBackendGateway
         return Task.FromResult(FrontendActionResult.Deferred(
             "出力先選択UIを確認しました。接続後は個人情報をマスクしてZIPを生成します。"));
     }
+
+    public Task ShutdownAsync(CancellationToken ct = default) => Task.CompletedTask;
 
     private static AppSettings CreateSettings() => new()
     {
@@ -248,7 +266,12 @@ public sealed class DesignTimeBackendGateway : IFrontendBackendGateway
         {
             Type = condition.Type,
             Operator = condition.Operator,
-            Value = condition.Value?.ToString()
+            Value = condition.Value switch
+            {
+                string[] values => values.ToArray(),
+                IEnumerable<string> values => values.ToArray(),
+                _ => condition.Value,
+            }
         }).ToList(),
         Actions = rule.Actions.Select(action => new RuleAction
         {

@@ -80,7 +80,7 @@ public class PythonApiClientTests
         using var client = new PythonApiClient(httpClient);
         client.Configure(54321, Token);
 
-        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x" });
+        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = "text" });
 
         Assert.Null(result);
     }
@@ -95,7 +95,7 @@ public class PythonApiClientTests
         using var client = new PythonApiClient(httpClient);
         client.Configure(54321, Token);
 
-        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x" });
+        AnalyzeResponse? result = await client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = "text" });
 
         Assert.Null(result);
     }
@@ -114,7 +114,7 @@ public class PythonApiClientTests
         client.Configure(54321, Token);
 
         // スキーマ不一致/不正なレスポンスは握りつぶさず例外として伝播すること。
-        await Assert.ThrowsAsync<JsonException>(() => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x" }));
+        await Assert.ThrowsAsync<JsonException>(() => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = "text" }));
     }
 
     [Fact]
@@ -134,7 +134,7 @@ public class PythonApiClientTests
         cts.CancelAfter(TimeSpan.FromMilliseconds(50));
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x" }, cts.Token));
+            () => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = "text" }, cts.Token));
     }
 
     [Fact]
@@ -147,7 +147,25 @@ public class PythonApiClientTests
         using var client = new PythonApiClient(httpClient);
 
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x" }));
+            () => client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = "text" }));
+    }
+
+    [Fact]
+    public async Task AnalyzeAsync_OcrTextが空ならHttp送信せずNullを返す()
+    {
+        bool sent = false;
+        var handler = new StubHttpMessageHandler((_, _) =>
+        {
+            sent = true;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new PythonApiClient(httpClient);
+        client.Configure(54321, Token);
+
+        Assert.Null(await client.AnalyzeAsync(new AnalyzeRequest { FilePath = "x", OcrText = string.Empty }));
+        Assert.False(sent);
     }
 
     [Fact]

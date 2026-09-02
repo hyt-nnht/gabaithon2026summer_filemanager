@@ -95,7 +95,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         ocr_available = ocr.available and importlib.util.find_spec("pypdfium2") is not None
         slm_available = slm.available
         return {
-            "status": "ready" if pdf_available and ocr_available and slm_available else "degraded",
+            # 通常IPCはC# OCRテキストだけを解析するため、Python側PDF/OCRの有無は
+            # 開発用 /v1/analyze の能力表示に留め、SLMの有無だけを縮退判定に使う。
+            "status": "ready" if slm_available else "degraded",
             "service_version": __version__,
             "ocr_available": ocr_available,
             "pdf_available": pdf_available,
@@ -131,13 +133,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def analyze_ipc(request: AnalyzeRequest) -> AnalyzeResponse:
         try:
             result = await to_thread(
-                coordinator.analyze,
+                coordinator.analyze_text,
                 job_id="ipc",
                 file_path=request.file_path,
-                expected_size=None,
-                expected_last_write_utc=None,
                 analysis_mode="slm_with_rules_fallback",
-                provided_ocr_text=request.ocr_text,
+                ocr_text=request.ocr_text,
             )
             return build_ipc_response(result, request.extract_fields)
         except AnalysisError:
@@ -147,7 +147,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def analyze_detailed(request: DetailedAnalyzeRequest) -> JSONResponse:
         try:
             result = await to_thread(
-                coordinator.analyze,
+                coordinator.analyze_file,
                 job_id=request.job_id,
                 file_path=request.file_path,
                 expected_size=request.expected_size,

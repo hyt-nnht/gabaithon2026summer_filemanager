@@ -93,18 +93,21 @@
         "additionalProperties": false,
         "required": [
           "file_path",
+          "ocr_text",
           "extract_fields"
         ],
         "properties": {
           "file_path": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 1024,
+            "description": "Original path metadata. The IPC analyzer never opens this path."
           },
           "ocr_text": {
-            "type": [
-              "string",
-              "null"
-            ]
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100000,
+            "description": "Text extracted by Windows OCR in the C# process."
           },
           "extract_fields": {
             "type": "array",

@@ -161,7 +161,7 @@ public class DryRunSimulatorTests : IDisposable
     // --- Renameの衝突予測（Undoと同様、自動別名復元は行わない） --------------------------------
 
     [Fact]
-    public void Simulate_Renameで衝突がある場合はAutoRenameポリシーでも常に要確認になる()
+    public void Simulate_Renameで衝突がある場合は実処理と同じAutoRename結果になる()
     {
         CreateSourceFile("existing.pdf");
         string sourcePath = CreateSourceFile("report.pdf");
@@ -171,8 +171,24 @@ public class DryRunSimulatorTests : IDisposable
         var result = simulator.Simulate(new[] { BuildMetadata(sourcePath) }, rules, applyAllMatchingRules: false);
 
         var action = Assert.Single(Assert.Single(result).Actions);
-        Assert.True(action.RequiresConfirmation);
-        Assert.Null(action.PlannedDestinationPath);
+        Assert.False(action.RequiresConfirmation);
+        Assert.Equal(Path.Combine(_sourceDir, "existing_1.pdf"), action.PlannedDestinationPath);
+    }
+
+    [Fact]
+    public void Simulate_Renameのfilenameとextを実処理と同じように展開する()
+    {
+        string sourcePath = CreateSourceFile("report.pdf");
+        var rules = new List<RuleModel>
+        {
+            CreateRule("リネーム", Cond("extension", "equals", "pdf"), RenameTo("{filename}_整理済み{ext}"))
+        };
+
+        var result = _simulator.Simulate(new[] { BuildMetadata(sourcePath) }, rules, applyAllMatchingRules: false);
+
+        var action = Assert.Single(Assert.Single(result).Actions);
+        Assert.Equal(Path.Combine(_sourceDir, "report_整理済み.pdf"), action.PlannedDestinationPath);
+        Assert.True(File.Exists(sourcePath));
     }
 
     // --- 複数アクションの連鎖予測（ApplyAllMatchingRules） -------------------------------------
@@ -235,6 +251,25 @@ public class DryRunSimulatorTests : IDisposable
         // 実ファイルは一切動いていない。
         Assert.True(File.Exists(Path.Combine(_sourceDir, "a.pdf")));
         Assert.True(File.Exists(Path.Combine(_sourceDir, "b.docx")));
+    }
+
+    [Fact]
+    public async Task SimulateFilesAsync_Python未接続でもCSharpOCR条件をプレビューできる()
+    {
+        string sourcePath = CreateSourceFile("invoice.pdf");
+        var ocr = new FakeOcrService { OcrTextToReturn = "請求書 発行日 2026年8月25日" };
+        var simulator = new DryRunSimulator(new RuleEvaluator(), ocrService: ocr, pythonApiClient: null);
+        var rules = new List<RuleModel>
+        {
+            CreateRule("OCR分類", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir))
+        };
+
+        var result = await simulator.SimulateFilesAsync(
+            new[] { BuildMetadata(sourcePath) }, rules, applyAllMatchingRules: false);
+
+        Assert.True(Assert.Single(result).IsMatched);
+        Assert.Equal(1, ocr.ExtractTextCallCount);
+        Assert.True(File.Exists(sourcePath));
     }
 
     [Fact]
