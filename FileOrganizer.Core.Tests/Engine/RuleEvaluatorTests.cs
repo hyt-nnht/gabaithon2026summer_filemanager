@@ -388,6 +388,36 @@ public class RuleEvaluatorTests
         Assert.True(result.IsMatched);
     }
 
+    [Fact]
+    public void WatchFolder外のファイルにはルールを適用しない()
+    {
+        var metadata = CreateMetadata();
+        metadata.FullPath = @"C:\other\report.pdf";
+        var rule = CreateRule("watch限定", new[] { Cond("extension", "equals", "pdf") });
+        rule.WatchFolder = @"C:\watch";
+
+        Assert.False(_evaluator.Evaluate(metadata, new[] { rule }, false).IsMatched);
+    }
+
+    [Fact]
+    public void WatchFolder配下のサブフォルダにはルールを適用する()
+    {
+        var metadata = CreateMetadata();
+        metadata.FullPath = @"C:\watch\sub\report.pdf";
+        var rule = CreateRule("watch限定", new[] { Cond("extension", "equals", "pdf") });
+        rule.WatchFolder = @"C:\watch";
+
+        Assert.True(_evaluator.Evaluate(metadata, new[] { rule }, false).IsMatched);
+    }
+
+    [Fact]
+    public void In条件のカンマ区切り文字列を配列と同様に評価する()
+    {
+        var rule = CreateRule("旧UI互換", new[] { Cond("extension", "in", ".png, .pdf, .jpg") });
+
+        Assert.True(_evaluator.Evaluate(CreateMetadata("report.pdf"), new[] { rule }, false).IsMatched);
+    }
+
     // --- 引数検証 -------------------------------------------------------------------------
 
     [Fact]

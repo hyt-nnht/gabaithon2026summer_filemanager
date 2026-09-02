@@ -1,8 +1,10 @@
 using System.ComponentModel;
 using System.Windows;
+using FileOrganizer.UI.Models;
 using FileOrganizer.UI.Services;
 using FileOrganizer.UI.ViewModels;
 using FileOrganizer.Widgets.DropZone;
+using FileOrganizer.Widgets.QuickLook;
 using FileOrganizer.Widgets.Tray;
 
 namespace FileOrganizer.UI;
@@ -14,6 +16,7 @@ public partial class App : Application
     private MainWindow? _mainWindow;
     private TrayIconManager? _trayIcon;
     private DropShelfWindow? _dropShelfWindow;
+    private QuickLookController? _quickLookController;
     private readonly CancellationTokenSource _applicationCancellation = new();
     private bool _isExiting;
 
@@ -21,9 +24,8 @@ public partial class App : Application
     {
         base.OnStartup(e);
 
-        // UI開発段階では実ファイル、SQLite、Pythonプロセスへ触れないGatewayを使用する。
-        // バックエンド統合時は ProductionBackendGateway を実装してこの1行だけ差し替える。
-        _backendGateway = new DesignTimeBackendGateway();
+        _backendGateway = new ProductionBackendGateway();
+        _backendGateway.ActivityOccurred += OnBackendActivity;
 
         _mainViewModel = new MainViewModel(_backendGateway);
         _mainWindow = new MainWindow(_mainViewModel);
@@ -49,7 +51,11 @@ public partial class App : Application
             _dropShelfWindow.Close();
         }
         _trayIcon?.Dispose();
-        (_backendGateway as IDisposable)?.Dispose();
+        _quickLookController?.Dispose();
+        if (_backendGateway is not null)
+            _backendGateway.ActivityOccurred -= OnBackendActivity;
+        if (_backendGateway is IAsyncDisposable asyncDisposable)
+            asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
         _applicationCancellation.Dispose();
         base.OnExit(e);
     }
@@ -83,6 +89,17 @@ public partial class App : Application
             // Explorer/通知領域が利用できない環境でもメインUIは継続する。
             _mainViewModel.ShowMessage($"タスクトレイを初期化できませんでした: {ex.Message}");
         }
+
+        try
+        {
+            _quickLookController = new QuickLookController(
+                () => _mainViewModel?.Settings.IsQuickLookEnabled == true,
+                Dispatcher);
+        }
+        catch (Exception ex)
+        {
+            _mainViewModel.ShowMessage($"Quick Lookを初期化できませんでした: {ex.Message}");
+        }
     }
 
     private void ShowMainWindow()
@@ -111,9 +128,8 @@ public partial class App : Application
 
     private void OnDroppedFilesSubmitted(object? sender, DroppedFilesSubmittedEventArgs e)
     {
-        // Productionではファイル単位のDry Run Gatewayへ渡す。現段階では承認イベントの確認だけを行う。
-        _mainViewModel?.ShowMessage($"{e.Paths.Count}件を受け取りました。バックエンド接続後に整理内容を計算します。");
         ShowMainWindow();
+        _mainWindow?.ShowDryRunForFiles(e.Paths);
     }
 
     private void OnDashboardPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -150,15 +166,33 @@ public partial class App : Application
         _trayIcon?.ShowNotification("File Organizer", "フォルダの監視を続けています。終了はトレイメニューから行えます。");
     }
 
-    private void ExitApplication()
+    private async void ExitApplication()
     {
         _isExiting = true;
         _applicationCancellation.Cancel();
+        if (_backendGateway is not null)
+        {
+            try { await _backendGateway.ShutdownAsync(); }
+            catch { /* 終了処理は継続する。Job Object破棄はOnExitで必ず行う。 */ }
+        }
         if (_mainWindow is not null)
         {
             _mainWindow.Closing -= OnMainWindowClosing;
             _mainWindow.Close();
         }
         Shutdown();
+    }
+
+    private void OnBackendActivity(object? sender, BackendActivityEventArgs e)
+    {
+        if (string.IsNullOrWhiteSpace(e.Message) || _mainViewModel?.Settings.EnableToastNotifications != true)
+            return;
+        if (Dispatcher.HasShutdownStarted) return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            try { _trayIcon?.ShowNotification("File Organizer", e.Message); }
+            catch (ObjectDisposedException) { }
+        }));
     }
 }

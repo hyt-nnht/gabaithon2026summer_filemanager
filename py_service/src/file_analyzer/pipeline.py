@@ -48,47 +48,121 @@ class AnalysisCoordinator:
         analysis_mode: Literal["rules_only", "slm_with_rules_fallback"],
         provided_ocr_text: str | None = None,
     ) -> dict[str, Any]:
+        """Backward-compatible dispatcher for the diagnostics and test callers."""
+        if provided_ocr_text is not None and normalize_text(provided_ocr_text):
+            return self.analyze_text(
+                job_id=job_id,
+                file_path=file_path,
+                ocr_text=provided_ocr_text,
+                analysis_mode=analysis_mode,
+            )
+        return self.analyze_file(
+            job_id=job_id,
+            file_path=file_path,
+            expected_size=expected_size,
+            expected_last_write_utc=expected_last_write_utc,
+            analysis_mode=analysis_mode,
+        )
+
+    def analyze_text(
+        self,
+        *,
+        job_id: str,
+        file_path: str,
+        ocr_text: str,
+        analysis_mode: Literal["rules_only", "slm_with_rules_fallback"],
+    ) -> dict[str, Any]:
+        """Analyze C# OCR text without resolving, opening, or stat-ing ``file_path``."""
+        started = perf_counter()
+        normalized_ocr_text = normalize_text(ocr_text)
+        if not normalized_ocr_text:
+            raise AnalysisError("OCR_TEXT_REQUIRED", "OCRテキストが空です")
+
+        original_file_name = self._safe_file_name(file_path)
+        extraction = ExtractionResult(
+            text=normalized_ocr_text,
+            source="provided_ocr_text",
+            confidence=None,
+            page_count=None,
+            elapsed_ms=0,
+        )
+
+        with self._analysis_lock:
+            return self._analyze_extraction(
+                job_id=job_id,
+                original_file_name=original_file_name,
+                extraction=extraction,
+                analysis_mode=analysis_mode,
+                started=started,
+            )
+
+    def analyze_file(
+        self,
+        *,
+        job_id: str,
+        file_path: str,
+        expected_size: int | None,
+        expected_last_write_utc: datetime | None,
+        analysis_mode: Literal["rules_only", "slm_with_rules_fallback"],
+    ) -> dict[str, Any]:
+        """Diagnostics-only path that may read an allow-listed local file."""
         started = perf_counter()
         path = self._validate_file(file_path, expected_size, expected_last_write_utc)
         with self._analysis_lock:
-            normalized_ocr_text = normalize_text(provided_ocr_text) if provided_ocr_text is not None else ""
-            if normalized_ocr_text:
-                extraction = ExtractionResult(
-                    text=normalized_ocr_text,
-                    source="provided_ocr_text",
-                    confidence=None,
-                    page_count=None,
-                    elapsed_ms=0,
-                )
-            else:
-                extraction = self.extraction_router.extract(path)
-            baseline = self.rules.classify(extraction.text, path.name)
-            ai_suggestion: ClassificationCandidate | None = None
-            warnings = list(extraction.warnings)
-            fallback_used = False
+            extraction = self.extraction_router.extract(path)
+            return self._analyze_extraction(
+                job_id=job_id,
+                original_file_name=path.name,
+                extraction=extraction,
+                analysis_mode=analysis_mode,
+                started=started,
+            )
 
-            if analysis_mode == "slm_with_rules_fallback":
-                try:
-                    ai_suggestion = self.slm.classify(extraction.text, path.name, baseline)
-                except SlmError as exc:
-                    fallback_used = True
-                    warnings.append(WarningItem(exc.code, self._slm_warning_message(exc.code)))
+    def _analyze_extraction(
+        self,
+        *,
+        job_id: str,
+        original_file_name: str,
+        extraction: ExtractionResult,
+        analysis_mode: Literal["rules_only", "slm_with_rules_fallback"],
+        started: float,
+    ) -> dict[str, Any]:
+        baseline = self.rules.classify(extraction.text, original_file_name)
+        ai_suggestion: ClassificationCandidate | None = None
+        warnings = list(extraction.warnings)
+        fallback_used = False
 
-            decision = self._merge(baseline, ai_suggestion)
-            decision.suggested_base_name = suggest_base_name(decision)
-            return {
-                "schema_version": "1.0",
-                "job_id": job_id,
-                "status": "partial" if fallback_used else "success",
-                "extraction": extraction.public_dict(self.settings.text_preview_chars),
-                "baseline": baseline.public_dict(),
-                "ai_suggestion": ai_suggestion.public_dict(include_details=True) if ai_suggestion else None,
-                "final_decision": decision.to_dict(),
-                "fallback_used": fallback_used,
-                "warnings": [warning.to_dict() for warning in warnings],
-                "error": None,
-                "elapsed_ms": round((perf_counter() - started) * 1_000),
-            }
+        if analysis_mode == "slm_with_rules_fallback":
+            try:
+                ai_suggestion = self.slm.classify(extraction.text, original_file_name, baseline)
+            except SlmError as exc:
+                fallback_used = True
+                warnings.append(WarningItem(exc.code, self._slm_warning_message(exc.code)))
+
+        decision = self._merge(baseline, ai_suggestion)
+        decision.suggested_base_name = suggest_base_name(decision)
+        return {
+            "schema_version": "1.0",
+            "job_id": job_id,
+            "status": "partial" if fallback_used else "success",
+            "extraction": extraction.public_dict(self.settings.text_preview_chars),
+            "baseline": baseline.public_dict(),
+            "ai_suggestion": ai_suggestion.public_dict(include_details=True) if ai_suggestion else None,
+            "final_decision": decision.to_dict(),
+            "fallback_used": fallback_used,
+            "warnings": [warning.to_dict() for warning in warnings],
+            "error": None,
+            "elapsed_ms": round((perf_counter() - started) * 1_000),
+        }
+
+    @staticmethod
+    def _safe_file_name(file_path: str) -> str:
+        # Pure Path operations only: do not call resolve/exists/stat/open in the IPC text path.
+        normalized = file_path.replace("\\", "/")
+        file_name = normalized.rsplit("/", 1)[-1].strip()
+        if not file_name or len(file_name) > 255 or any(ord(char) < 32 for char in file_name):
+            raise AnalysisError("INVALID_FILE_NAME", "ファイル名が不正です")
+        return file_name
 
     @staticmethod
     def _merge(

@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using FileOrganizer.Shared.Models;
 using FileOrganizer.UI.Mvvm;
 using FileOrganizer.UI.Services;
+using Microsoft.Win32;
 
 namespace FileOrganizer.UI.ViewModels;
 
@@ -24,11 +25,7 @@ public sealed class SettingsViewModel : ObservableObject
     {
         _gateway = gateway;
         _showMessage = showMessage;
-        AddFolderCommand = new RelayCommand(() => WatchFolders.Add(new WatchFolderItemViewModel(new WatchFolderSetting
-        {
-            Path = @"C:\Users\demo\Documents\Inbox",
-            Enabled = true
-        })));
+        AddFolderCommand = new RelayCommand(AddWatchFolder);
         RemoveFolderCommand = new RelayCommand(parameter =>
         {
             if (parameter is WatchFolderItemViewModel folder)
@@ -73,8 +70,30 @@ public sealed class SettingsViewModel : ObservableObject
         WalCheckpointIntervalMinutes = settings.WalCheckpointIntervalMinutes;
     }
 
+    private void AddWatchFolder()
+    {
+        var dialog = new OpenFolderDialog
+        {
+            Title = "監視するフォルダーを選択",
+            Multiselect = false,
+        };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.FolderName)) return;
+        if (WatchFolders.Any(folder => string.Equals(folder.Path, dialog.FolderName, StringComparison.OrdinalIgnoreCase))) return;
+        WatchFolders.Add(new WatchFolderItemViewModel(new WatchFolderSetting
+        {
+            Path = dialog.FolderName,
+            Enabled = true,
+        }));
+    }
+
     private async Task SaveAsync()
     {
+        if (!string.Equals(QuickLookShortcut.Trim(), "Space", StringComparison.OrdinalIgnoreCase))
+        {
+            _showMessage("現在のQuick LookショートカットはSpaceキーだけに対応しています。");
+            return;
+        }
+
         var settings = new AppSettings
         {
             WatchFolders = WatchFolders.Select(folder => folder.ToModel()).ToList(),
@@ -82,7 +101,7 @@ public sealed class SettingsViewModel : ObservableObject
             PeriodicScanIntervalHours = Math.Clamp(PeriodicScanIntervalHours, 1, 168),
             ApplyAllMatchingRules = ApplyAllMatchingRules,
             IsQuickLookEnabled = IsQuickLookEnabled,
-            QuickLookShortcut = QuickLookShortcut.Trim(),
+            QuickLookShortcut = "Space",
             PythonPort = Math.Clamp(PythonPort, 0, 65535),
             UsePreloadedSlmModel = UsePreloadedSlmModel,
             SlmModelPath = SlmModelPath.Trim(),

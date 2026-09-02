@@ -60,7 +60,7 @@ Visual Studioでは`FileOrganizer.slnx`を開き、`py_service`のPython環境�
 
 ## API
 
-- `GET /api/v1/health`: PDF、OCR、SLMの利用可否
+- `GET /api/v1/health`: 解析サービスとSLMの利用可否（Python側PDF/OCRはデバッグ機能として表示）
 - `POST /api/v1/warmup`: OCRとSLMのロード・疎通
 - `POST /api/v1/analyze`: C#の`AnalyzeRequest`/`AnalyzeResponse`契約に準拠した解析
 - `POST /v1/analyze`: Python側の詳細結果を確認するデバッグ用API
@@ -78,13 +78,13 @@ FileOrganizerから起動する場合は`ORGANIZER_IPC_TOKEN`を設定し、全A
 }
 ```
 
-`ocr_text`があればそのテキストを直接分類し、`null`または空文字ならPython側でPDF/画像から抽出します。SLMが未設定、推論失敗、JSON不正の場合も規則結果へフォールバックし、解析できた場合は`success: true`を返します。
+通常IPCの`/api/v1/analyze`では`ocr_text`が必須です。`file_path`は元の表示名・拡張子を判断するメタデータとしてだけ使い、Pythonはパスの解決、存在確認、`stat`、ファイル読込を行いません。SLMが未設定、推論失敗、JSON不正の場合も規則結果へフォールバックし、解析できた場合は`success: true`を返します。
 
 ## 主な環境変数
 
 | 変数 | 既定値 | 用途 |
 |---|---:|---|
-| `ANALYZER_ALLOWED_ROOT` | 起動ディレクトリ | 読み取りを許可するルート |
+| `ANALYZER_ALLOWED_ROOT` | 起動ディレクトリ | デバッグ用`/v1/analyze`だけが使う読取許可ルート。通常IPCでは未使用 |
 | `ORGANIZER_IPC_TOKEN` | 未設定 | C#とのIPCで使用するBearerトークン |
 | `ANALYZER_BEARER_TOKEN` | 未設定 | 手動実行向けの旧Bearerトークン |
 | `ANALYZER_MIN_PDF_TEXT_CHARS` | `50` | テキストPDFと判断する最小文字数 |

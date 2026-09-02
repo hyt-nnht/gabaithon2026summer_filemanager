@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Windows.Threading;
+using FileOrganizer.UI.Models;
 using FileOrganizer.UI.Mvvm;
 using FileOrganizer.UI.Services;
 
@@ -18,6 +19,7 @@ public sealed class MainViewModel : ObservableObject
     public MainViewModel(IFrontendBackendGateway gateway)
     {
         _gateway = gateway;
+        _gateway.ActivityOccurred += OnBackendActivity;
 
         Dashboard = new DashboardViewModel(gateway, ShowMessage);
         Rules = new RulesViewModel(gateway, ShowMessage);
@@ -89,6 +91,14 @@ public sealed class MainViewModel : ObservableObject
     public string ConnectionLabel => IsBackendConnected ? "バックエンド接続済み" : "UI確認モード";
 
     public DryRunViewModel CreateDryRunViewModel(string folderPath) => new(_gateway, folderPath);
+    public DryRunViewModel CreateDryRunViewModel(IReadOnlyList<string> filePaths) => new(_gateway, filePaths);
+
+    public async Task RefreshRuntimeAsync()
+    {
+        FrontendSnapshot snapshot = await _gateway.LoadAsync();
+        Dashboard.Load(snapshot);
+        History.Load(snapshot.RecentHistory);
+    }
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
@@ -100,6 +110,8 @@ public sealed class MainViewModel : ObservableObject
             Rules.Load(snapshot.Rules);
             History.Load(snapshot.RecentHistory);
             Settings.Load(snapshot.Settings);
+            OnPropertyChanged(nameof(IsBackendConnected));
+            OnPropertyChanged(nameof(ConnectionLabel));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -150,6 +162,18 @@ public sealed class MainViewModel : ObservableObject
     {
         foreach (var item in NavigationItems)
             item.IsSelected = string.Equals(item.Key, CurrentPageKey, StringComparison.Ordinal);
+    }
+
+    private void OnBackendActivity(object? sender, BackendActivityEventArgs e)
+    {
+        System.Windows.Application? application = System.Windows.Application.Current;
+        if (application is null || application.Dispatcher.HasShutdownStarted) return;
+        application.Dispatcher.BeginInvoke(new Action(async () =>
+        {
+            if (!string.IsNullOrWhiteSpace(e.Message)) ShowMessage(e.Message);
+            try { await RefreshRuntimeAsync(); }
+            catch (Exception ex) { ShowMessage($"画面の状態を更新できませんでした: {ex.Message}"); }
+        }));
     }
 }
 

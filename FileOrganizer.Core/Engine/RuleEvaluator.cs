@@ -31,9 +31,9 @@ namespace FileOrganizer.Core.Engine;
 /// </para>
 /// <para>
 /// <b>対応する条件種別（<c>RuleCondition.Type</c>）</b>: <c>extension</c>, <c>filename</c>,
-/// <c>size_mb</c>, <c>days_old</c> を評価する。<c>ai_category</c>, <c>ocr_contains</c>は
-/// Phase2（Python/OCR連携）で<see cref="FileMetadata.AiCategory"/>/<see cref="FileMetadata.OcrText"/>が
-/// 実際に埋まるまでの間、評価パイプラインだけを用意しておく（未設定時は常に不一致）。
+/// <c>size_mb</c>, <c>days_old</c>, <c>ai_category</c>, <c>ocr_contains</c> を評価する。
+/// 後者2つはProcessingCoordinator/DryRunSimulatorがOCR・AI解析結果を
+/// <see cref="FileMetadata.AiCategory"/>/<see cref="FileMetadata.OcrText"/>へ設定した場合に有効になる。
 /// </para>
 /// </remarks>
 public class RuleEvaluator : IRuleEngine
@@ -74,6 +74,7 @@ public class RuleEvaluator : IRuleEngine
 
     private static bool MatchesRule(RuleModel rule, FileMetadata metadata)
     {
+        if (!IsWithinRuleWatchFolder(rule.WatchFolder, metadata.FullPath)) return false;
         if (rule.Conditions.Count == 0) return false;
 
         foreach (var condition in rule.Conditions)
@@ -81,6 +82,35 @@ public class RuleEvaluator : IRuleEngine
             if (!MatchesCondition(condition, metadata)) return false; // AND評価
         }
         return true;
+    }
+
+    /// <summary>
+    /// ルールに監視フォルダが指定されている場合、そのフォルダ自身または配下のファイルだけを対象にする。
+    /// 空欄は、プリセットや旧バージョンの設定との互換性のため「全監視フォルダ共通ルール」と扱う。
+    /// <see cref="Path.GetRelativePath(string, string)"/>を使い、<c>C:\Inbox2</c>が
+    /// <c>C:\Inbox</c>配下と誤判定されるような単純な前方一致を避ける。
+    /// </summary>
+    private static bool IsWithinRuleWatchFolder(string? watchFolder, string? filePath)
+    {
+        if (string.IsNullOrWhiteSpace(watchFolder)) return true;
+        if (string.IsNullOrWhiteSpace(filePath)) return false;
+
+        try
+        {
+            string root = Path.GetFullPath(watchFolder);
+            string candidate = Path.GetFullPath(filePath);
+            string relative = Path.GetRelativePath(root, candidate);
+
+            return relative != ".."
+                && !relative.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                && !relative.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal)
+                && !Path.IsPathRooted(relative);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            // ユーザー入力の不正パスは安全側で不一致にする。
+            return false;
+        }
     }
 
     private static bool MatchesCondition(RuleCondition condition, FileMetadata metadata) => condition.Type switch
@@ -142,11 +172,11 @@ public class RuleEvaluator : IRuleEngine
         _ => false, // contains/regexは数値条件には意味を持たない
     };
 
-    // --- ai_category / ocr_contains（Phase2で本格利用。現時点は評価経路のみ用意） -------------
+    // --- ai_category / ocr_contains -------------------------------------------------------
 
     private static bool EvaluateOcrContains(RuleCondition condition, FileMetadata metadata)
     {
-        if (string.IsNullOrEmpty(metadata.OcrText)) return false; // Phase2でPython解析結果が入るまでは常に不一致
+        if (string.IsNullOrEmpty(metadata.OcrText)) return false;
         return condition.Operator switch
         {
             "equals" => string.Equals(metadata.OcrText, ToSingleString(condition.Value), StringComparison.OrdinalIgnoreCase),
@@ -158,7 +188,7 @@ public class RuleEvaluator : IRuleEngine
 
     private static bool EvaluateAiCategory(RuleCondition condition, FileMetadata metadata)
     {
-        if (string.IsNullOrEmpty(metadata.AiCategory)) return false; // Phase2でAI分類結果が入るまでは常に不一致
+        if (string.IsNullOrEmpty(metadata.AiCategory)) return false;
         return condition.Operator switch
         {
             "equals" => string.Equals(metadata.AiCategory, ToSingleString(condition.Value), StringComparison.OrdinalIgnoreCase),
@@ -214,7 +244,9 @@ public class RuleEvaluator : IRuleEngine
             case null:
                 return Array.Empty<string>();
             case string s:
-                return new[] { s }; // 単一文字列も1要素リストとして扱う
+                // 旧UIは「.pdf, .png」のようなカンマ区切り文字列を保存していたため、
+                // 配列形式と同じ意味になるよう正規化する。単一値も1要素として扱われる。
+                return s.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
             case JsonElement { ValueKind: JsonValueKind.Array } je:
                 return je.EnumerateArray()
                     .Select(e => e.ValueKind == JsonValueKind.String ? e.GetString() ?? string.Empty : e.GetRawText())

@@ -22,10 +22,25 @@ public partial class MainWindow : Window
     private void OnDryRunRequested(object? sender, EventArgs e)
     {
         var dryRunViewModel = _viewModel.CreateDryRunViewModel(_viewModel.Dashboard.PrimaryWatchFolder);
+        ShowDryRun(dryRunViewModel);
+    }
+
+    public void ShowDryRunForFiles(IReadOnlyList<string> filePaths)
+        => ShowDryRun(_viewModel.CreateDryRunViewModel(filePaths));
+
+    private void ShowDryRun(DryRunViewModel dryRunViewModel)
+    {
         var dialog = new DryRunWindow(dryRunViewModel)
         {
             Owner = this
         };
-        dialog.ShowDialog();
+        if (dialog.ShowDialog() == true)
+            _ = RefreshAfterDryRunAsync();
+    }
+
+    private async Task RefreshAfterDryRunAsync()
+    {
+        try { await _viewModel.RefreshRuntimeAsync(); }
+        catch (Exception ex) { _viewModel.ShowMessage($"実行後の画面更新に失敗しました: {ex.Message}"); }
     }
 }

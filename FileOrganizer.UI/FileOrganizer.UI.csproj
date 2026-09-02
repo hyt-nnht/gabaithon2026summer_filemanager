@@ -11,6 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\FileOrganizer.Core\FileOrganizer.Core.csproj" />
+    <ProjectReference Include="..\FileOrganizer.Infrastructure\FileOrganizer.Infrastructure.csproj" />
     <ProjectReference Include="..\FileOrganizer.Shared\FileOrganizer.Shared.csproj" />
     <ProjectReference Include="..\FileOrganizer.Widgets\FileOrganizer.Widgets.csproj" />
   </ItemGroup>

@@ -18,7 +18,7 @@ namespace FileOrganizer.Core.Services;
 /// </para>
 /// <para>
 /// Watcherオーケストレータ（<c>DebouncedWatcher</c>/<c>FileStabilityDetector</c>/
-/// <c>PeriodicScanner</c>を束ねて<c>IWatcherService</c>を実装する、Phase2以降で追加予定のクラス）は、
+/// <c>PeriodicScanner</c>を束ねる<c>WatcherService</c>）は、
 /// 本インターフェースと<c>IWatcherService</c>の両方を実装し、
 /// 内部で1個の「パス→(抑止解除時刻, トークン)」テーブルを共有する形を想定している
 /// （<c>IWatcherService.SuppressPath</c>はこのテーブルへトークンなしで登録する薄いオーバーロードとして

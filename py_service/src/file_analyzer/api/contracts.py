@@ -21,12 +21,20 @@ class DetailedAnalyzeRequest(BaseModel):
 
 
 class AnalyzeRequest(BaseModel):
-    """C# FileOrganizer.Shared.Models.AnalyzeRequest compatible request."""
+    """C# IPC request. ``file_path`` is metadata only and is never opened."""
 
     model_config = ConfigDict(extra="forbid")
 
-    file_path: str = Field(min_length=1)
-    ocr_text: str | None = None
+    file_path: str = Field(
+        min_length=1,
+        max_length=1_024,
+        description="Original path metadata. The IPC analyzer never opens this path.",
+    )
+    ocr_text: str = Field(
+        min_length=1,
+        max_length=100_000,
+        description="Text extracted by Windows OCR in the C# process.",
+    )
     extract_fields: list[str]
 
 

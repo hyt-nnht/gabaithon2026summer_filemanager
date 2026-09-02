@@ -99,7 +99,8 @@ try
     var request = new AnalyzeRequest
     {
         FilePath = options.FilePath ?? @"C:\Demo\Inbox\sample.pdf",
-        OcrText = null,
+        // 通常IPCはC# OCR本文だけを解析し、Python側ではFilePathを開かない。
+        OcrText = "請求書 発行元: サンプル株式会社 2026年8月25日",
         ExtractFields = ["date", "company", "document_type", "category"],
     };
 

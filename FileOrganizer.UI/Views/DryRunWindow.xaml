@@ -52,8 +52,7 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
             <Grid Margin="2,0,10,9">
-                <CheckBox Content="すべて選択" IsChecked="True" Style="{StaticResource CheckBoxStyle}"
-                          Command="{Binding ToggleAllCommand}" CommandParameter="{Binding IsChecked, RelativeSource={RelativeSource Self}}" />
+                <CheckBox Content="すべて選択" IsChecked="{Binding AreAllSelected, Mode=TwoWay}" Style="{StaticResource CheckBoxStyle}" />
                 <TextBlock Text="{Binding SelectedCount, StringFormat={}{0} 件を選択中}" HorizontalAlignment="Right" Style="{StaticResource CaptionStyle}" />
             </Grid>
 
@@ -68,7 +67,8 @@
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <CheckBox IsChecked="{Binding IsSelected}" Style="{StaticResource CheckBoxStyle}" VerticalAlignment="Top" Margin="0,4,0,0" />
+                                    <CheckBox IsChecked="{Binding IsSelected}" IsEnabled="{Binding RequiresConfirmation, Converter={StaticResource InverseBooleanConverter}}"
+                                              Style="{StaticResource CheckBoxStyle}" VerticalAlignment="Top" Margin="0,4,0,0" />
                                     <StackPanel Grid.Column="1">
                                         <StackPanel Orientation="Horizontal">
                                             <TextBlock Text="{Binding SourceFileName}" FontWeight="SemiBold" FontSize="13" />
