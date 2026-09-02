@@ -1,0 +1,163 @@
+<UserControl x:Class="FileOrganizer.UI.Views.SettingsView"
+             x:Name="Root"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid Margin="34,28,34,34">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="18" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0">
+            <StackPanel>
+                <TextBlock Text="設定" Style="{StaticResource PageTitleStyle}" />
+                <TextBlock Text="監視、安全性、ローカルAIの動作を調整します。"
+                           Foreground="{StaticResource TextSecondaryBrush}" Margin="0,5,0,0" />
+            </StackPanel>
+            <Button Content="設定を保存" Command="{Binding SaveCommand}" Style="{StaticResource PrimaryButtonStyle}"
+                    HorizontalAlignment="Right" VerticalAlignment="Center" />
+        </Grid>
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <Grid MaxWidth="950" HorizontalAlignment="Left">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="18" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="18" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.ColumnSpan="3" Style="{StaticResource CardStyle}">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="監視フォルダ" Style="{StaticResource SectionTitleStyle}" />
+                                <TextBlock Text="追加されたファイルだけを自動整理します。既存ファイルは「今すぐ整理」から確認します。"
+                                           Style="{StaticResource CaptionStyle}" Margin="0,4,0,0" />
+                            </StackPanel>
+                            <Button Content="＋ フォルダを追加" Command="{Binding AddFolderCommand}" Style="{StaticResource SecondaryButtonStyle}"
+                                    HorizontalAlignment="Right" Padding="12,7" MinHeight="32" />
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding WatchFolders}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="#F8F9FC" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                            CornerRadius="10" Padding="12" Margin="0,4">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="40" />
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox IsChecked="{Binding Enabled}" Style="{StaticResource CheckBoxStyle}" Margin="0,0,10,0" />
+                                            <TextBox Grid.Column="1" Text="{Binding Path, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}" />
+                                            <CheckBox Grid.Column="2" Content="サブフォルダも含む" IsChecked="{Binding IncludeSubdirectories}"
+                                                      Style="{StaticResource CheckBoxStyle}" Margin="14,0" />
+                                            <Border Grid.Column="3" Background="#EAF8F1" CornerRadius="12" Padding="8,4" VerticalAlignment="Center">
+                                                <TextBlock Text="監視" Foreground="{StaticResource SuccessBrush}" FontSize="10" FontWeight="SemiBold" />
+                                            </Border>
+                                            <Button Grid.Column="4" Content="×" Command="{Binding DataContext.RemoveFolderCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                    CommandParameter="{Binding}" Style="{StaticResource IconButtonStyle}" />
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="2" Grid.Column="0" Style="{StaticResource CardStyle}" VerticalAlignment="Top">
+                    <StackPanel>
+                        <TextBlock Text="整理と安全性" Style="{StaticResource SectionTitleStyle}" />
+                        <TextBlock Text="ルール評価と安定確認" Style="{StaticResource CaptionStyle}" Margin="0,4,0,18" />
+
+                        <Grid Margin="0,3">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="105"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="安定確認の間隔" FontWeight="SemiBold" />
+                                <TextBlock Text="500〜5000ms。既定値は750msです。" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <TextBox Grid.Column="1" Text="{Binding StabilityCheckIntervalMs}" Style="{StaticResource TextBoxStyle}" HorizontalContentAlignment="Right" />
+                        </Grid>
+                        <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14" />
+                        <Grid Margin="0,3">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="105"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="定期再走査" FontWeight="SemiBold" />
+                                <TextBlock Text="イベント欠落に備える間隔（時間）" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <TextBox Grid.Column="1" Text="{Binding PeriodicScanIntervalHours}" Style="{StaticResource TextBoxStyle}" HorizontalContentAlignment="Right" />
+                        </Grid>
+                        <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14" />
+                        <CheckBox Content="一致したすべてのルールを適用する" IsChecked="{Binding ApplyAllMatchingRules}"
+                                  Style="{StaticResource CheckBoxStyle}" />
+                        <TextBlock Text="オフの場合は、リストの最上位にある一致ルールだけを適用します。"
+                                   Style="{StaticResource CaptionStyle}" Margin="22,3,0,0" />
+                        <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,14" />
+                        <Grid Margin="0,3">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="105"/></Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="WALチェックポイント" FontWeight="SemiBold" />
+                                <TextBlock Text="履歴DBの肥大化を防止（分）" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" />
+                            </StackPanel>
+                            <TextBox Grid.Column="1" Text="{Binding WalCheckpointIntervalMinutes}" Style="{StaticResource TextBoxStyle}" HorizontalContentAlignment="Right" />
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <StackPanel Grid.Row="2" Grid.Column="2">
+                    <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18">
+                        <StackPanel>
+                            <TextBlock Text="ローカルAI" Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="解析はPC内で完結し、OCR本文は保存しません。" Style="{StaticResource CaptionStyle}" Margin="0,4,0,16" />
+
+                            <CheckBox Content="デモ用の事前配置モデルを使用" IsChecked="{Binding UsePreloadedSlmModel}"
+                                      Style="{StaticResource CheckBoxStyle}" />
+                            <TextBlock Text="モデルファイル" Style="{StaticResource CaptionStyle}" Margin="0,13,0,5" />
+                            <TextBox Text="{Binding SlmModelPath}" Style="{StaticResource TextBoxStyle}" />
+                            <Grid Margin="0,13,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="105"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Pythonポート" FontWeight="SemiBold" />
+                                    <TextBlock Text="0 = 起動時に動的割当" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" />
+                                </StackPanel>
+                                <TextBox Grid.Column="1" Text="{Binding PythonPort}" Style="{StaticResource TextBoxStyle}" HorizontalContentAlignment="Right" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <Border Style="{StaticResource CardStyle}">
+                        <StackPanel>
+                            <TextBlock Text="操作とサポート" Style="{StaticResource SectionTitleStyle}" />
+                            <CheckBox Content="整理完了を通知する" IsChecked="{Binding EnableToastNotifications}"
+                                      Style="{StaticResource CheckBoxStyle}" Margin="0,15,0,4" />
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="120"/></Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Quick Look" FontWeight="SemiBold" />
+                                    <TextBlock Text="エクスプローラー上でのみ反応" Style="{StaticResource CaptionStyle}" Margin="0,3,0,0" />
+                                </StackPanel>
+                                <CheckBox Grid.Column="1" Content="有効" IsChecked="{Binding IsQuickLookEnabled}"
+                                          Style="{StaticResource CheckBoxStyle}" HorizontalAlignment="Right" />
+                            </Grid>
+                            <TextBlock Text="ショートカット" Style="{StaticResource CaptionStyle}" Margin="0,13,0,5" />
+                            <TextBox Text="{Binding QuickLookShortcut}" Style="{StaticResource TextBoxStyle}" IsEnabled="{Binding IsQuickLookEnabled}" />
+                            <Button Content="診断ログを出力" Command="{Binding ExportDiagnosticsCommand}"
+                                    Style="{StaticResource SecondaryButtonStyle}" Margin="0,16,0,0" />
+                            <TextBlock Text="ファイル名・OCR本文・個人情報をマスクして出力します。"
+                                       Style="{StaticResource CaptionStyle}" Margin="0,7,0,0" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>
