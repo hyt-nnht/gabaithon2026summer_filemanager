@@ -7,4 +7,6 @@
   <Project Path="FileOrganizer.Core/FileOrganizer.Core.csproj" />
   <Project Path="FileOrganizer.Infrastructure/FileOrganizer.Infrastructure.csproj" />
   <Project Path="FileOrganizer.Shared/FileOrganizer.Shared.csproj" />
+  <Project Path="FileOrganizer.UI/FileOrganizer.UI.csproj" />
+  <Project Path="FileOrganizer.Widgets/FileOrganizer.Widgets.csproj" />
 </Solution>

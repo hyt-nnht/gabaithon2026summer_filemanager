@@ -1,0 +1,90 @@
+<Window x:Class="FileOrganizer.Widgets.DropZone.DropShelfWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="File Organizer Drop Zone"
+        Width="330" Height="390"
+        MinWidth="300" MinHeight="320"
+        WindowStartupLocation="Manual"
+        ResizeMode="CanResizeWithGrip"
+        ShowInTaskbar="False"
+        Topmost="True"
+        AllowDrop="True"
+        Background="#F5F7FB"
+        DragEnter="OnDragEnter"
+        DragLeave="OnDragLeave"
+        Drop="OnDrop">
+    <Window.Resources>
+        <SolidColorBrush x:Key="DropAccent" Color="#5B5FEF" />
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,9" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="9" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Border Margin="12" Background="White" BorderBrush="#E4E8F1" BorderThickness="1" CornerRadius="16" Padding="18">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="12" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Drop Zone" FontSize="18" FontWeight="SemiBold" Foreground="#182033" />
+                    <TextBlock Text="ここへファイルをドロップ" FontSize="11" Foreground="#667085" Margin="0,3,0,0" />
+                </StackPanel>
+                <Button Grid.Column="1" Content="×" Click="OnCloseClicked" Width="32" Height="32" Padding="0" Background="#F1F3F7" Foreground="#667085" />
+            </Grid>
+
+            <Border x:Name="DropSurface" Grid.Row="2" Background="#F8F9FF" BorderBrush="#BCC0FA" BorderThickness="1"
+                    CornerRadius="13" Padding="14">
+                <Grid>
+                    <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Border Width="54" Height="54" Background="#EBEDFF" CornerRadius="17">
+                            <TextBlock Text="↓" Foreground="{StaticResource DropAccent}" FontSize="25" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock Text="ファイルをドロップ" FontWeight="SemiBold" Foreground="#182033" HorizontalAlignment="Center" Margin="0,12,0,0" />
+                        <TextBlock Text="複数ファイルにも対応" FontSize="10" Foreground="#667085" HorizontalAlignment="Center" Margin="0,4,0,0" />
+                    </StackPanel>
+
+                    <ListBox x:Name="DroppedFilesList" ItemsSource="{Binding DroppedFiles}" BorderThickness="0" Background="Transparent"
+                             Visibility="Collapsed" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,5">
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="30"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                    <Border Width="25" Height="25" CornerRadius="7" Background="#EBEDFF">
+                                        <TextBlock Text="F" Foreground="{StaticResource DropAccent}" FontSize="10" FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" Margin="8,0,0,0">
+                                        <TextBlock Text="{Binding FileName}" FontSize="11" FontWeight="SemiBold" Foreground="#182033" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                        <TextBlock Text="{Binding DirectoryLabel}" FontSize="9" Foreground="#7C8497" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </Border>
+
+            <Grid Grid.Row="3" Margin="0,12,0,0">
+                <Button Content="クリア" Click="OnClearClicked" Background="#F1F3F7" Foreground="#667085" HorizontalAlignment="Left" />
+                <Button Content="整理内容を確認" Click="OnOrganizeClicked" Background="{StaticResource DropAccent}" Foreground="White" HorizontalAlignment="Right" />
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
