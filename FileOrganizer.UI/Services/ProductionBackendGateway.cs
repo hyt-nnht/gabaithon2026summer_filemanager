@@ -42,6 +42,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
     private bool _initialized;
     private bool _monitoring;
     private bool _disposed;
+    private int _activeAiAnalysisCount;
     private string _aiStatus = "ローカルAI 未接続（基本ルールは利用可能）";
 
     public event EventHandler<BackendActivityEventArgs>? ActivityOccurred;
@@ -69,7 +70,8 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
                 _watcherService?.PendingCount ?? 0,
                 organizedToday,
                 lastProcessed,
-                _aiStatus));
+                _aiStatus,
+                Volatile.Read(ref _activeAiAnalysisCount) > 0));
     }
 
     public async Task SaveRulesAsync(IReadOnlyList<RuleModel> rules, CancellationToken ct = default)
@@ -372,6 +374,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
                 _aiStatus = "ローカルAI 停止（基本ルールへ退避）";
                 ActivityOccurred?.Invoke(this, new BackendActivityEventArgs(_aiStatus));
             };
+            _pythonSupervisor.AnalysisStateChanged += OnPythonAnalysisStateChanged;
 
             AppSettings runtimeSettings = PreparePythonSettings(settings, repositoryRoot);
             await _pythonSupervisor.StartAsync(runtimeSettings, _modelDownloadManager, null, ct).ConfigureAwait(false);
@@ -399,6 +402,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
     {
         if (_pythonSupervisor is not null)
         {
+            _pythonSupervisor.AnalysisStateChanged -= OnPythonAnalysisStateChanged;
             await _pythonSupervisor.DisposeAsync().ConfigureAwait(false);
             _pythonSupervisor = null;
         }
@@ -408,7 +412,42 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
         _modelDownloadManager = null;
         _jobObjectManager?.Dispose();
         _jobObjectManager = null;
+        Interlocked.Exchange(ref _activeAiAnalysisCount, 0);
         _aiStatus = "ローカルAI 未接続（基本ルールは利用可能）";
+    }
+
+    private void OnPythonAnalysisStateChanged(object? sender, PythonAnalysisStateChangedEventArgs e)
+    {
+        if (e.IsRunning)
+        {
+            Interlocked.Increment(ref _activeAiAnalysisCount);
+            _aiStatus = "AI解析中…";
+        }
+        else
+        {
+            int remaining = Interlocked.Decrement(ref _activeAiAnalysisCount);
+            if (remaining < 0)
+            {
+                Interlocked.Exchange(ref _activeAiAnalysisCount, 0);
+                remaining = 0;
+            }
+
+            if (remaining == 0)
+            {
+                _aiStatus = e.Error is OperationCanceledException
+                    ? "AI解析をキャンセルしました"
+                    : e.Response?.ClassificationSource switch
+                    {
+                        "slm" => $"SLM分類完了（{e.Response.Category ?? "分類不明"}）",
+                        "rules" => $"規則分類を使用（{e.Response.Category ?? "分類不明"}）",
+                        _ when e.Response?.Success == true => $"分類完了（{e.Response.Category ?? "分類不明"}）",
+                        _ => "AI解析失敗（基本ルールへ退避）",
+                    };
+            }
+        }
+
+        // messageをnullにしてトーストを出さず、ホーム画面の状態だけを更新する。
+        ActivityOccurred?.Invoke(this, new BackendActivityEventArgs());
     }
 
     private async Task RebuildProcessingPipelineAsync(AppSettings settings)
@@ -461,9 +500,16 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
                 WillSkip = action.WillSkip,
                 RequiresConfirmation = action.RequiresConfirmation,
             }).ToList();
-            string note = actions.Any(action => action.RequiresConfirmation)
+            string operationNote = actions.Any(action => action.RequiresConfirmation)
                 ? "競合または設定不足のため、このままでは実行できません。"
                 : actions.Any(action => action.WillSkip) ? "同名衝突ポリシーによりスキップ予定です。" : string.Empty;
+            string classificationNote = plan.ClassificationSource switch
+            {
+                "slm" => $"SLM分類: {plan.ClassificationCategory ?? "分類不明"}",
+                "rules" => $"規則分類: {plan.ClassificationCategory ?? "分類不明"}",
+                _ => string.Empty,
+            };
+            string note = string.Join("  ", new[] { classificationNote, operationNote }.Where(value => value.Length > 0));
             long size = info.Exists ? info.Length : 0;
             DateTime lastWrite = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue;
             string lightweightHash = info.Exists ? HashHelper.ComputeLightweightHash(plan.SourcePath) : string.Empty;
@@ -476,6 +522,8 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
                 SourceLastWriteTimeUtc = lastWrite,
                 SourceLightweightHash = lightweightHash,
                 Note = note,
+                ClassificationSource = plan.ClassificationSource,
+                ClassificationCategory = plan.ClassificationCategory,
                 PlanSignature = ComputePlanSignature(plan.SourcePath, size, lastWrite, lightweightHash, plan.MatchedRuleName, actions),
             });
         }

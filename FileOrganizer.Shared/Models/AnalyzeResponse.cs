@@ -18,4 +18,8 @@ public class AnalyzeResponse
 
     [JsonPropertyName("confidence")]
     public double? Confidence { get; set; }
+
+    /// <summary>最終分類に採用された分類器。"slm" または "rules"。</summary>
+    [JsonPropertyName("classification_source")]
+    public string? ClassificationSource { get; set; }
 }

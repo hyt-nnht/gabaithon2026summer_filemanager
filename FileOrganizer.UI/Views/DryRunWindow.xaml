@@ -101,7 +101,7 @@
             <StackPanel Grid.RowSpan="2" HorizontalAlignment="Center" VerticalAlignment="Center"
                         Visibility="{Binding IsLoading, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <ProgressBar Width="190" Height="4" IsIndeterminate="True" Foreground="{StaticResource AccentBrush}" />
-                <TextBlock Text="ルールと同名衝突を確認しています…" Style="{StaticResource CaptionStyle}" Margin="0,12,0,0" />
+                <TextBlock Text="OCR・AI分類と整理ルールを確認しています…" Style="{StaticResource CaptionStyle}" Margin="0,12,0,0" />
             </StackPanel>
         </Grid>
 

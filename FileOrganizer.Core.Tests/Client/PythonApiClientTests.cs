@@ -32,7 +32,8 @@ public class PythonApiClientTests
                   "success": true,
                   "category": "請求書",
                   "metadata": { "date": "2026-08-25", "company": "合同会社テックサプライ" },
-                  "confidence": 0.95
+                  "confidence": 0.95,
+                  "classification_source": "slm"
                 }
                 """;
             return new HttpResponseMessage(HttpStatusCode.OK)
@@ -58,6 +59,7 @@ public class PythonApiClientTests
         Assert.True(result!.Success);
         Assert.Equal("請求書", result.Category);
         Assert.Equal(0.95, result.Confidence);
+        Assert.Equal("slm", result.ClassificationSource);
         Assert.Equal("2026-08-25", result.Metadata?["date"]);
 
         Assert.NotNull(capturedRequest);
@@ -68,6 +70,17 @@ public class PythonApiClientTests
         Assert.NotNull(capturedBody);
         using JsonDocument sentJson = JsonDocument.Parse(capturedBody!);
         Assert.Equal(@"C:\Users\user\Downloads\sample.pdf", sentJson.RootElement.GetProperty("file_path").GetString());
+    }
+
+    [Fact]
+    public void Constructor_既定タイムアウトはSLM初回推論を待てる5分()
+    {
+        using var httpClient = new HttpClient(new StubHttpMessageHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK))));
+        using var client = new PythonApiClient(httpClient);
+
+        Assert.Equal(PythonApiClient.DefaultRequestTimeout, httpClient.Timeout);
+        Assert.Equal(TimeSpan.FromMinutes(5), httpClient.Timeout);
     }
 
     [Fact]

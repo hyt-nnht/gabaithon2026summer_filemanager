@@ -103,6 +103,43 @@ class ClassificationTests(unittest.TestCase):
         response_format = completion_options[0]["response_format"]
         self.assertEqual("json_object", response_format["type"])
 
+    def test_llama_cpp_classifier_keeps_model_loaded_by_default(self) -> None:
+        created_count = 0
+        closed_count = 0
+
+        class FakeLlama:
+            def __init__(self, **options: object) -> None:
+                nonlocal created_count
+                created_count += 1
+
+            def create_chat_completion(self, **kwargs: object) -> dict[str, object]:
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"document_type":"invoice","organization":null,'
+                                '"document_date":null,"confidence":0.8,"reason":"請求書表記"}'
+                            }
+                        }
+                    ]
+                }
+
+            def close(self) -> None:
+                nonlocal closed_count
+                closed_count += 1
+
+        classifier = LlamaCppSlmClassifier(Path(__file__))
+        baseline = ClassificationCandidate("invoice")
+
+        with patch.dict("sys.modules", {"llama_cpp": type("FakeModule", (), {"Llama": FakeLlama})()}):
+            classifier.classify("請求書", "invoice-1.pdf", baseline)
+            classifier.classify("請求書", "invoice-2.pdf", baseline)
+
+        self.assertEqual(1, created_count)
+        self.assertEqual(0, closed_count)
+        classifier.close()
+        self.assertEqual(1, closed_count)
+
     def test_merge_fills_missing_slm_fields_from_rules(self) -> None:
         baseline = ClassificationCandidate("invoice", "規則株式会社", "2026-08-30")
         ai = ClassificationCandidate("receipt", None, None, source="slm")

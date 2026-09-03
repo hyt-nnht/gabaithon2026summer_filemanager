@@ -31,6 +31,9 @@ namespace FileOrganizer.Core.Client;
 /// </remarks>
 public sealed class PythonApiClient : IPythonApiClient, IDisposable
 {
+    /// <summary>モデルの初回ロードとCPU推論を含めて待機できる既定タイムアウト。</summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
+
     /// <summary>AI_IMPLEMENTATION_GUIDE.md §3.2で確定済みのエンドポイント。</summary>
     public const string AnalyzeEndpointPath = "/api/v1/analyze";
 
@@ -51,8 +54,8 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
     /// 新規に内部管理のHttpClientを生成するコンストラクタ。
     /// </summary>
     /// <param name="requestTimeout">
-    /// 1リクエストあたりのタイムアウト。既定30秒（SLM推論を伴う/api/v1/analyzeは
-    /// ルールベースのみのフォールバックより時間がかかりうるため余裕を持たせている）。
+    /// 1リクエストあたりのタイムアウト。既定5分（SLMの初回モデルロードと
+    /// CPU推論を30秒で打ち切らないため、通常のHTTP処理より長く確保している）。
     /// </param>
     public PythonApiClient(TimeSpan? requestTimeout = null)
         : this(new HttpClient(), ownsHttpClient: true, requestTimeout)
@@ -74,7 +77,7 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
 
         _httpClient = httpClient;
         _ownsHttpClient = ownsHttpClient;
-        _httpClient.Timeout = requestTimeout ?? TimeSpan.FromSeconds(30);
+        _httpClient.Timeout = requestTimeout ?? DefaultRequestTimeout;
     }
 
     /// <inheritdoc />

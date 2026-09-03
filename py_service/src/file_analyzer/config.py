@@ -20,7 +20,7 @@ class Settings:
     slm_context_size: int = 4_096
     slm_threads: int | None = None
     slm_max_tokens: int = 384
-    unload_slm_after_inference: bool = True
+    unload_slm_after_inference: bool = False
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -39,6 +39,6 @@ class Settings:
             slm_context_size=int(os.getenv("ANALYZER_SLM_CONTEXT_SIZE", "4096")),
             slm_threads=int(threads_value) if threads_value else None,
             slm_max_tokens=int(os.getenv("ANALYZER_SLM_MAX_TOKENS", "384")),
-            unload_slm_after_inference=os.getenv("ANALYZER_SLM_UNLOAD", "true").strip().lower()
+            unload_slm_after_inference=os.getenv("ANALYZER_SLM_UNLOAD", "false").strip().lower()
             in {"1", "true", "yes", "on"},
         )
