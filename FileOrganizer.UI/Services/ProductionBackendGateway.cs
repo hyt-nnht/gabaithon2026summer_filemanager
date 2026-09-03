@@ -22,6 +22,9 @@ namespace FileOrganizer.UI.Services;
 /// </summary>
 public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDisposable
 {
+    private static readonly TimeSpan PythonStartupTimeout = TimeSpan.FromSeconds(30);
+    private const string BundledSlmModelFileName = "gemma-2-2b-it-Q4_K_M.gguf";
+
     private readonly SemaphoreSlim _initializationLock = new(1, 1);
     private readonly SemaphoreSlim _processingLock = new(1, 1);
     private readonly JsonSettingsRepository _settingsRepository = new();
@@ -357,6 +360,9 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
 
     private async Task TryStartPythonAsync(AppSettings settings, CancellationToken ct)
     {
+        using var startupCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        startupCts.CancelAfter(PythonStartupTimeout);
+
         try
         {
             string repositoryRoot = FindRepositoryRoot();
@@ -377,24 +383,19 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
             _pythonSupervisor.AnalysisStateChanged += OnPythonAnalysisStateChanged;
 
             AppSettings runtimeSettings = PreparePythonSettings(settings, repositoryRoot);
-            await _pythonSupervisor.StartAsync(runtimeSettings, _modelDownloadManager, null, ct).ConfigureAwait(false);
-            bool healthy = await _pythonSupervisor.HealthCheckAsync(ct).ConfigureAwait(false);
+            await _pythonSupervisor.StartAsync(runtimeSettings, _modelDownloadManager, null, startupCts.Token).ConfigureAwait(false);
+            bool healthy = await _pythonSupervisor.HealthCheckAsync(startupCts.Token).ConfigureAwait(false);
             _aiStatus = healthy ? "ローカルAI 接続済み" : "ローカルAI 応答なし（基本ルールへ退避）";
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            await StopPythonAsync().ConfigureAwait(false);
+            _aiStatus = $"ローカルAI 起動タイムアウト（{PythonStartupTimeout.TotalSeconds:F0}秒、基本ルールへ退避）";
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
+            await StopPythonAsync().ConfigureAwait(false);
             _aiStatus = $"ローカルAI 起動失敗（基本ルールへ退避）: {ex.GetType().Name}";
-            if (_pythonSupervisor is not null)
-            {
-                await _pythonSupervisor.DisposeAsync().ConfigureAwait(false);
-                _pythonSupervisor = null;
-            }
-            _pythonApiClient?.Dispose();
-            _pythonApiClient = null;
-            _modelDownloadManager?.Dispose();
-            _modelDownloadManager = null;
-            _jobObjectManager?.Dispose();
-            _jobObjectManager = null;
         }
     }
 
@@ -620,7 +621,31 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
 
     private static AppSettings PreparePythonSettings(AppSettings source, string repositoryRoot)
     {
-        if (!source.UsePreloadedSlmModel || string.IsNullOrWhiteSpace(source.SlmModelPath) || Path.IsPathFullyQualified(source.SlmModelPath))
+        if (!source.UsePreloadedSlmModel)
+        {
+            return source;
+        }
+
+        string bundledModelPath = Path.Combine(
+            repositoryRoot,
+            "py_service",
+            "models",
+            BundledSlmModelFileName);
+        string? configuredModelPath = string.IsNullOrWhiteSpace(source.SlmModelPath)
+            ? null
+            : Path.IsPathFullyQualified(source.SlmModelPath)
+                ? source.SlmModelPath
+                : Path.GetFullPath(source.SlmModelPath, repositoryRoot);
+
+        // 旧UI例の ".\\models\\..." や移動前の絶対パスが残っていても、
+        // リポジトリ同梱モデルを優先して初期画面で1.7GBの再取得を待たない。
+        string? effectiveModelPath = configuredModelPath is not null && File.Exists(configuredModelPath)
+            ? configuredModelPath
+            : File.Exists(bundledModelPath)
+                ? bundledModelPath
+                : configuredModelPath;
+
+        if (effectiveModelPath is null)
         {
             return source;
         }
@@ -635,7 +660,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
             QuickLookShortcut = source.QuickLookShortcut,
             PythonPort = source.PythonPort,
             UsePreloadedSlmModel = true,
-            SlmModelPath = Path.GetFullPath(source.SlmModelPath, repositoryRoot),
+            SlmModelPath = effectiveModelPath,
             EnableToastNotifications = source.EnableToastNotifications,
             WalCheckpointIntervalMinutes = source.WalCheckpointIntervalMinutes,
             SchemaVersion = source.SchemaVersion,

@@ -81,6 +81,7 @@ public class PythonApiClientTests
 
         Assert.Equal(PythonApiClient.DefaultRequestTimeout, httpClient.Timeout);
         Assert.Equal(TimeSpan.FromMinutes(5), httpClient.Timeout);
+        Assert.Equal(TimeSpan.FromSeconds(10), PythonApiClient.DefaultHealthCheckTimeout);
     }
 
     [Fact]
@@ -206,6 +207,24 @@ public class PythonApiClientTests
 
         using var httpClient = new HttpClient(handler);
         using var client = new PythonApiClient(httpClient);
+        client.Configure(54321, Token);
+
+        Assert.False(await client.HealthCheckAsync());
+    }
+
+    [Fact]
+    public async Task HealthCheckAsync_解析用5分を待たず専用タイムアウトでFalseを返す()
+    {
+        var handler = new StubHttpMessageHandler(async (_, cancellationToken) =>
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        using var httpClient = new HttpClient(handler);
+        using var client = new PythonApiClient(
+            httpClient,
+            healthCheckTimeout: TimeSpan.FromMilliseconds(25));
         client.Configure(54321, Token);
 
         Assert.False(await client.HealthCheckAsync());
