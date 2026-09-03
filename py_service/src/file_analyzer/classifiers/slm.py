@@ -89,7 +89,7 @@ class LlamaCppSlmClassifier:
         threads: int | None = None,
         max_tokens: int = 384,
         input_chars: int = 4_000,
-        unload_after_inference: bool = True,
+        unload_after_inference: bool = False,
     ) -> None:
         self.model_path = model_path
         self.context_size = context_size

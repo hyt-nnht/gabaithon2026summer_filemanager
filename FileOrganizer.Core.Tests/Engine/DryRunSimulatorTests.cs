@@ -273,6 +273,34 @@ public class DryRunSimulatorTests : IDisposable
     }
 
     [Fact]
+    public async Task SimulateFilesAsync_SLM分類元とカテゴリをプレビューへ含める()
+    {
+        string sourcePath = CreateSourceFile("invoice.pdf");
+        var ocr = new FakeOcrService { OcrTextToReturn = "請求書 発行日 2026年8月25日" };
+        var python = new FakePythonApiClient
+        {
+            ResponseToReturn = new AnalyzeResponse
+            {
+                Success = true,
+                Category = "請求書",
+                ClassificationSource = "slm",
+            },
+        };
+        var simulator = new DryRunSimulator(new RuleEvaluator(), ocrService: ocr, pythonApiClient: python);
+        var rules = new List<RuleModel>
+        {
+            CreateRule("AI請求書分類", Cond("ai_category", "equals", "請求書"), MoveTo(_destDir)),
+        };
+
+        DryRunPlanEntry entry = Assert.Single(await simulator.SimulateFilesAsync(
+            new[] { BuildMetadata(sourcePath) }, rules, applyAllMatchingRules: false));
+
+        Assert.True(entry.IsMatched);
+        Assert.Equal("slm", entry.ClassificationSource);
+        Assert.Equal("請求書", entry.ClassificationCategory);
+    }
+
+    [Fact]
     public async Task SimulateFolderAsync_隠しファイル_システムファイル_lnkは除外する()
     {
         string hiddenPath = CreateSourceFile("hidden.pdf");

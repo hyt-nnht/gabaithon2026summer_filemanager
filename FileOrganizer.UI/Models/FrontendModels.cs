@@ -13,7 +13,8 @@ public sealed record MonitoringSnapshot(
     int PendingFiles,
     int OrganizedToday,
     DateTimeOffset? LastProcessedAt,
-    string AiStatus);
+    string AiStatus,
+    bool IsAiAnalyzing = false);
 
 public sealed record FrontendActionResult(bool Success, string Message)
 {
@@ -32,6 +33,8 @@ public sealed class DryRunPreviewItem
     /// <summary>プレビュー内容を実行直前に照合するための署名。ファイル内容そのものは含めない。</summary>
     public string PlanSignature { get; init; } = string.Empty;
     public string Note { get; init; } = string.Empty;
+    public string? ClassificationSource { get; init; }
+    public string? ClassificationCategory { get; init; }
 
     public bool RequiresConfirmation => Actions.Any(action => action.RequiresConfirmation);
     public string? DestinationPath => Actions.LastOrDefault(action => action.DestinationPath is not null)?.DestinationPath;

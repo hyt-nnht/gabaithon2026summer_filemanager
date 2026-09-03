@@ -45,6 +45,12 @@ public sealed class DryRunPlanEntry
     /// <summary>適用されるルール名（<c>ApplyAllMatchingRules=true</c>時は最優先ルールの名前）。</summary>
     public string? MatchedRuleName { get; init; }
 
+    /// <summary>プレビュー作成時に採用された分類器（"slm" / "rules"）。</summary>
+    public string? ClassificationSource { get; init; }
+
+    /// <summary>プレビュー作成時の分類カテゴリ。</summary>
+    public string? ClassificationCategory { get; init; }
+
     /// <summary>実行されるであろうアクションの予測結果（優先順位・実行順）。</summary>
     public IReadOnlyList<DryRunActionPlan> Actions { get; init; } = Array.Empty<DryRunActionPlan>();
 }
@@ -193,7 +199,13 @@ public sealed class DryRunSimulator
         RuleEvaluationResult evaluation = _ruleEngine.Evaluate(metadata, rules, applyAllMatchingRules);
         if (!evaluation.IsMatched)
         {
-            return new DryRunPlanEntry { SourcePath = metadata.FullPath, IsMatched = false };
+            return new DryRunPlanEntry
+            {
+                SourcePath = metadata.FullPath,
+                IsMatched = false,
+                ClassificationSource = analysis?.ClassificationSource,
+                ClassificationCategory = analysis?.Category,
+            };
         }
 
         IReadOnlyList<RuleModel> rulesToApply = applyAllMatchingRules
@@ -205,6 +217,8 @@ public sealed class DryRunSimulator
             SourcePath = metadata.FullPath,
             IsMatched = true,
             MatchedRuleName = rulesToApply.Count > 0 ? rulesToApply[0].Name : null,
+            ClassificationSource = analysis?.ClassificationSource,
+            ClassificationCategory = analysis?.Category,
             Actions = SimulateActionChain(metadata.FullPath, rulesToApply, analysis),
         };
     }

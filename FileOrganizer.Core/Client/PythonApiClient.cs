@@ -31,6 +31,12 @@ namespace FileOrganizer.Core.Client;
 /// </remarks>
 public sealed class PythonApiClient : IPythonApiClient, IDisposable
 {
+    /// <summary>モデルの初回ロードとCPU推論を含めて待機できる既定タイムアウト。</summary>
+    public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromMinutes(5);
+
+    /// <summary>ローカルプロセスの死活確認だけに使う短い既定タイムアウト。</summary>
+    public static readonly TimeSpan DefaultHealthCheckTimeout = TimeSpan.FromSeconds(10);
+
     /// <summary>AI_IMPLEMENTATION_GUIDE.md §3.2で確定済みのエンドポイント。</summary>
     public const string AnalyzeEndpointPath = "/api/v1/analyze";
 
@@ -44,6 +50,7 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
 
     private readonly HttpClient _httpClient;
     private readonly bool _ownsHttpClient;
+    private readonly TimeSpan _healthCheckTimeout;
     private bool _configured;
     private bool _disposed;
 
@@ -51,11 +58,14 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
     /// 新規に内部管理のHttpClientを生成するコンストラクタ。
     /// </summary>
     /// <param name="requestTimeout">
-    /// 1リクエストあたりのタイムアウト。既定30秒（SLM推論を伴う/api/v1/analyzeは
-    /// ルールベースのみのフォールバックより時間がかかりうるため余裕を持たせている）。
+    /// 1リクエストあたりのタイムアウト。既定5分（SLMの初回モデルロードと
+    /// CPU推論を30秒で打ち切らないため、通常のHTTP処理より長く確保している）。
     /// </param>
-    public PythonApiClient(TimeSpan? requestTimeout = null)
-        : this(new HttpClient(), ownsHttpClient: true, requestTimeout)
+    /// <param name="healthCheckTimeout">
+    /// ヘルスチェック専用タイムアウト。既定10秒。AI解析用の長い待機時間とは分離する。
+    /// </param>
+    public PythonApiClient(TimeSpan? requestTimeout = null, TimeSpan? healthCheckTimeout = null)
+        : this(new HttpClient(), ownsHttpClient: true, requestTimeout, healthCheckTimeout)
     {
     }
 
@@ -63,18 +73,36 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
     /// テスト等でHttpClient（差し替え可能なHttpMessageHandlerを持つもの）を注入するコンストラクタ。
     /// 渡した<paramref name="httpClient"/>の所有権は呼び出し元に残り、Disposeでは破棄しない。
     /// </summary>
-    public PythonApiClient(HttpClient httpClient, TimeSpan? requestTimeout = null)
-        : this(httpClient, ownsHttpClient: false, requestTimeout)
+    /// <param name="httpClient">使用するHTTPクライアント。</param>
+    /// <param name="requestTimeout">AI解析を含むHTTPリクエストのタイムアウト。</param>
+    /// <param name="healthCheckTimeout">ヘルスチェック専用タイムアウト。</param>
+    public PythonApiClient(
+        HttpClient httpClient,
+        TimeSpan? requestTimeout = null,
+        TimeSpan? healthCheckTimeout = null)
+        : this(httpClient, ownsHttpClient: false, requestTimeout, healthCheckTimeout)
     {
     }
 
-    private PythonApiClient(HttpClient httpClient, bool ownsHttpClient, TimeSpan? requestTimeout)
+    private PythonApiClient(
+        HttpClient httpClient,
+        bool ownsHttpClient,
+        TimeSpan? requestTimeout,
+        TimeSpan? healthCheckTimeout)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
 
         _httpClient = httpClient;
         _ownsHttpClient = ownsHttpClient;
-        _httpClient.Timeout = requestTimeout ?? TimeSpan.FromSeconds(30);
+        _httpClient.Timeout = requestTimeout ?? DefaultRequestTimeout;
+        _healthCheckTimeout = healthCheckTimeout ?? DefaultHealthCheckTimeout;
+        if (_healthCheckTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(healthCheckTimeout),
+                _healthCheckTimeout,
+                "ヘルスチェックのタイムアウトは正の値で指定してください。");
+        }
     }
 
     /// <inheritdoc />
@@ -96,11 +124,13 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
     public async Task<bool> HealthCheckAsync(CancellationToken ct = default)
     {
         EnsureConfigured();
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(_healthCheckTimeout);
 
         try
         {
             using HttpResponseMessage response = await _httpClient
-                .GetAsync(HealthEndpointPath, ct)
+                .GetAsync(HealthEndpointPath, timeoutCts.Token)
                 .ConfigureAwait(false);
             return response.IsSuccessStatusCode;
         }
@@ -109,9 +139,9 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
             // 接続失敗（プロセス未起動・ポート不一致・DNS/TCPエラー等）。
             return false;
         }
-        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            // 呼び出し元のctではなく、HttpClient.Timeout側の内部タイムアウト。
+            // 呼び出し元のctではなく、ヘルスチェック専用またはHttpClient側のタイムアウト。
             return false;
         }
     }

@@ -78,6 +78,7 @@ class IpcContractTests(unittest.TestCase):
             response.metadata,
         )
         self.assertEqual(0.95, response.confidence)
+        self.assertEqual("slm", response.classification_source)
 
     def test_provided_ocr_text_bypasses_python_text_extraction(self) -> None:
         coordinator = AnalysisCoordinator(
@@ -160,6 +161,7 @@ class IpcContractTests(unittest.TestCase):
         self.assertIsNone(result["final_decision"]["document_date"])
         self.assertIsNone(result["final_decision"]["organization"])
         self.assertEqual({"document_type": "請求書", "category": "請求書"}, response.metadata)
+        self.assertEqual("rules", response.classification_source)
 
     def test_null_ocr_text_uses_python_extraction_before_contract_conversion(self) -> None:
         router = RecordingExtractionRouter(
@@ -205,6 +207,12 @@ class IpcContractTests(unittest.TestCase):
             settings = Settings.from_env()
 
         self.assertEqual("organizer-token", settings.bearer_token)
+
+    def test_slm_model_is_kept_loaded_by_default(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            settings = Settings.from_env()
+
+        self.assertFalse(settings.unload_slm_after_inference)
 
     def test_csharp_api_routes_are_registered(self) -> None:
         app = create_app(Settings(allowed_root=Path.cwd()))

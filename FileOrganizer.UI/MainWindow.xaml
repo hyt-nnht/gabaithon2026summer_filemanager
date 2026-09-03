@@ -108,7 +108,8 @@
                     Visibility="{Binding IsInitializing, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                     <ProgressBar Width="180" Height="4" IsIndeterminate="True" Foreground="{StaticResource AccentBrush}" />
-                    <TextBlock Text="画面を準備しています…" Margin="0,14,0,0" Foreground="{StaticResource TextSecondaryBrush}" />
+                    <TextBlock Text="画面を準備しています…（ローカルAI起動は最大30秒）"
+                               Margin="0,14,0,0" Foreground="{StaticResource TextSecondaryBrush}" />
                 </StackPanel>
             </Border>
         </Grid>

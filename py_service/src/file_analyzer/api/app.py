@@ -50,6 +50,7 @@ def build_ipc_response(result: dict[str, Any], extract_fields: list[str]) -> Ana
         category=category,
         metadata=metadata,
         confidence=confidence,
+        classification_source=decision["decision_source"],
     )
 
 

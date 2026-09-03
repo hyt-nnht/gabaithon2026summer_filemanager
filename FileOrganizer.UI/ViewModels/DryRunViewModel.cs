@@ -13,7 +13,7 @@ public sealed class DryRunViewModel : ObservableObject, IDisposable
     private readonly IReadOnlyList<string>? _filePaths;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private bool _isLoading;
-    private string _statusMessage = "整理後の状態を計算しています…";
+    private string _statusMessage = "必要に応じてOCR・AI分類を実行しています…";
 
     public DryRunViewModel(IFrontendBackendGateway gateway, string folderPath)
     {

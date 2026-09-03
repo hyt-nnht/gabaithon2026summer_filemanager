@@ -209,6 +209,44 @@ public class PythonServiceSupervisorTests
     }
 
     [Fact]
+    public async Task AnalyzeAsync_開始とSLM完了状態を通知する()
+    {
+        using var jobObjectManager = new JobObjectManager();
+        var apiClient = new FakePythonApiClient();
+        apiClient.EnqueueAnalyzeResult(new AnalyzeResponse
+        {
+            Success = true,
+            Category = "請求書",
+            Confidence = 0.95,
+            ClassificationSource = "slm",
+        });
+
+        await using var supervisor = new PythonServiceSupervisor(
+            () => CreateManager(jobObjectManager, "-Port", "55168"), apiClient);
+        var states = new List<PythonAnalysisStateChangedEventArgs>();
+        supervisor.AnalysisStateChanged += (_, e) => states.Add(e);
+
+        await supervisor.StartAsync();
+        AnalyzeResponse? response = await supervisor.AnalyzeAsync(new AnalyzeRequest
+        {
+            FilePath = "sample.pdf",
+            OcrText = "請求書",
+        });
+
+        Assert.NotNull(response);
+        Assert.Collection(
+            states,
+            started => Assert.True(started.IsRunning),
+            completed =>
+            {
+                Assert.False(completed.IsRunning);
+                Assert.Same(response, completed.Response);
+                Assert.Null(completed.Error);
+                Assert.Equal("slm", completed.Response!.ClassificationSource);
+            });
+    }
+
+    [Fact]
     public async Task ProcessCrashed_PythonProcessManagerのイベントがSupervisor経由で中継される()
     {
         using var jobObjectManager = new JobObjectManager();
@@ -235,10 +273,12 @@ public class PythonServiceSupervisorTests
     private sealed class FakePythonApiClient : IPythonApiClient
     {
         private readonly ConcurrentQueue<bool> _healthCheckResults = new();
+        private readonly ConcurrentQueue<AnalyzeResponse> _analyzeResults = new();
 
         public List<(int Port, string Token)> ConfigureCalls { get; } = [];
 
         public void EnqueueHealthCheckResult(bool result) => _healthCheckResults.Enqueue(result);
+        public void EnqueueAnalyzeResult(AnalyzeResponse result) => _analyzeResults.Enqueue(result);
 
         public void Configure(int port, string bearerToken)
         {
@@ -252,6 +292,6 @@ public class PythonServiceSupervisorTests
             Task.FromResult(_healthCheckResults.TryDequeue(out bool result) ? result : true);
 
         public Task<AnalyzeResponse?> AnalyzeAsync(AnalyzeRequest request, CancellationToken ct = default) =>
-            throw new NotSupportedException("このテストではHealthCheckAsyncのみを使用する。");
+            Task.FromResult<AnalyzeResponse?>(_analyzeResults.TryDequeue(out AnalyzeResponse? result) ? result : null);
     }
 }

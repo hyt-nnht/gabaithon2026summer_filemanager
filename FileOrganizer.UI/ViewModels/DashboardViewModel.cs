@@ -13,6 +13,7 @@ public sealed class DashboardViewModel : ObservableObject
     private int _organizedToday;
     private int _pendingFiles;
     private string _aiStatus = "準備中";
+    private bool _isAiAnalyzing;
     private string _primaryWatchFolder = "監視フォルダを設定してください";
     private string _lastProcessedLabel = "まだ処理はありません";
 
@@ -74,6 +75,12 @@ public sealed class DashboardViewModel : ObservableObject
         private set => SetProperty(ref _aiStatus, value);
     }
 
+    public bool IsAiAnalyzing
+    {
+        get => _isAiAnalyzing;
+        private set => SetProperty(ref _isAiAnalyzing, value);
+    }
+
     public string PrimaryWatchFolder
     {
         get => _primaryWatchFolder;
@@ -92,6 +99,7 @@ public sealed class DashboardViewModel : ObservableObject
         OrganizedToday = snapshot.Monitoring.OrganizedToday;
         PendingFiles = snapshot.Monitoring.PendingFiles;
         AiStatus = snapshot.Monitoring.AiStatus;
+        IsAiAnalyzing = snapshot.Monitoring.IsAiAnalyzing;
         PrimaryWatchFolder = snapshot.Settings.WatchFolders.FirstOrDefault(folder => folder.Enabled)?.Path
             ?? "有効な監視フォルダがありません";
         LastProcessedLabel = snapshot.Monitoring.LastProcessedAt is { } last

@@ -26,6 +26,14 @@ public sealed class PythonServiceDegradedEventArgs : EventArgs
     public Exception? RespawnException { get; init; }
 }
 
+/// <summary>Python分類リクエストの開始・完了をUIへ通知するための状態。</summary>
+public sealed class PythonAnalysisStateChangedEventArgs : EventArgs
+{
+    public required bool IsRunning { get; init; }
+    public AnalyzeResponse? Response { get; init; }
+    public Exception? Error { get; init; }
+}
+
 /// <summary>
 /// <see cref="PythonProcessManager"/>（プロセス起動・クラッシュ検知）と<see cref="IPythonApiClient"/>
 /// （HTTP呼び出し）を束ね、仕様書§7.2-3「推論中のOOM等でPythonプロセスが異常終了した場合、
@@ -75,6 +83,9 @@ public sealed class PythonServiceSupervisor : IPythonApiClient, IAsyncDisposable
     /// UI層はこれを購読して、ユーザーへの警告表示等に使う（仕様書§7.2-3の「連続失敗時のUI通知」）。
     /// </summary>
     public event EventHandler<PythonServiceDegradedEventArgs>? ServiceDegraded;
+
+    /// <summary>OCR本文をPythonへ渡した分類処理の開始時と完了時に発火する。</summary>
+    public event EventHandler<PythonAnalysisStateChangedEventArgs>? AnalysisStateChanged;
 
     /// <summary>現在の連続失敗回数（成功のたびに0へリセットされる）。</summary>
     public int ConsecutiveFailureCount => _consecutiveFailureCount;
@@ -187,12 +198,36 @@ public sealed class PythonServiceSupervisor : IPythonApiClient, IAsyncDisposable
     /// <summary>
     /// <see cref="IPythonApiClient.AnalyzeAsync"/>を、失敗時の自動リスポーン＋1回再試行付きで呼び出す。
     /// </summary>
-    public Task<AnalyzeResponse?> AnalyzeAsync(AnalyzeRequest request, CancellationToken ct = default) =>
-        ExecuteWithRespawnRetryAsync(
-            client => client.AnalyzeAsync(request, ct),
-            result => result is not null,
-            operationName: "Analyze",
-            ct);
+    public async Task<AnalyzeResponse?> AnalyzeAsync(AnalyzeRequest request, CancellationToken ct = default)
+    {
+        AnalysisStateChanged?.Invoke(this, new PythonAnalysisStateChangedEventArgs { IsRunning = true });
+
+        AnalyzeResponse? result = null;
+        Exception? error = null;
+        try
+        {
+            result = await ExecuteWithRespawnRetryAsync(
+                client => client.AnalyzeAsync(request, ct),
+                response => response is not null,
+                operationName: "Analyze",
+                ct).ConfigureAwait(false);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+            throw;
+        }
+        finally
+        {
+            AnalysisStateChanged?.Invoke(this, new PythonAnalysisStateChangedEventArgs
+            {
+                IsRunning = false,
+                Response = result,
+                Error = error,
+            });
+        }
+    }
 
     private async Task<TResult> ExecuteWithRespawnRetryAsync<TResult>(
         Func<IPythonApiClient, Task<TResult>> call,

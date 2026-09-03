@@ -45,6 +45,7 @@ class AnalyzeResponse(BaseModel):
     category: str | None = None
     metadata: dict[str, str] | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
+    classification_source: Literal["slm", "rules"] | None = None
 
 
 class WarmupResponse(BaseModel):

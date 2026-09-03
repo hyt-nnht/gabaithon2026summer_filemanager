@@ -95,7 +95,7 @@ FileOrganizerから起動する場合は`ORGANIZER_IPC_TOKEN`を設定し、全A
 | `ANALYZER_SLM_CONTEXT_SIZE` | `4096` | SLMコンテキスト長 |
 | `ANALYZER_SLM_THREADS` | 自動 | CPU推論スレッド数 |
 | `ANALYZER_SLM_MAX_TOKENS` | `384` | SLM出力トークン上限 |
-| `ANALYZER_SLM_UNLOAD` | `true` | 推論後にモデルを解放するか |
+| `ANALYZER_SLM_UNLOAD` | `false` | 推論後にモデルを解放するか。既定では再ロード時間を避けるため保持 |
 
 デモPCで動作確認後に再現用バージョンを記録する場合は、同じ仮想環境で次を実行します。
 
