@@ -55,3 +55,15 @@ dotnet run --project FileOrganizer.UI/FileOrganizer.UI.csproj
 ```
 
 ローカルAIも使う場合は、Windowsから実行できるPython環境に `py_service` の依存パッケージが必要です。起動に失敗してもUI全体は停止せず、基本ルールへ自動的に退避します。
+
+## 操作履歴DBの確認
+
+通常はUIの「実行履歴」画面で確認できます。SQLiteの全項目を直接確認する場合は、リポジトリルートから読み取り専用ツールを実行します。
+
+```powershell
+python .\tools\show_operation_history.py
+python .\tools\show_operation_history.py --limit 100 --state Failed
+python .\tools\show_operation_history.py --format json
+```
+
+既定では `%LocalAppData%\FileOrganizer\organizer.db` を読みます。ツールはSQLiteを `mode=ro` で開くため、履歴を変更しません。
