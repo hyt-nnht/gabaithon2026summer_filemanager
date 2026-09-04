@@ -54,23 +54,23 @@ public sealed class ProcessingCompletedEventArgs : EventArgs
 /// 元のパスのまま後続アクションへ継続する。
 /// </para>
 /// <para>
-/// <b>OCR/AI連携（Phase2）</b>: 対象ルール群（<c>settings.LoadRulesAsync</c>で読み込んだ全ルール）の
+/// <b>本文抽出/AI連携（Phase2）</b>: 対象ルール群（<c>settings.LoadRulesAsync</c>で読み込んだ全ルール）の
 /// いずれかが<c>ocr_contains</c>または<c>ai_category</c>条件を持つ場合に限り、ルール評価（<see cref="RuleEvaluator"/>）
 /// の前に<see cref="EnrichWithAiMetadataAsync"/>で
-/// 2-1 <c>PdfToBitmapRenderer</c> → 2-2 <c>WindowsMediaOcrService</c>（いずれも<see cref="IOcrService"/>実装内部）
-/// でOCR全文を抽出し、0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>でカテゴリ・メタデータを取得する。
+/// TXT/DOCXは本文を直接読み込み、PDF/画像は<c>WindowsMediaOcrService</c>でOCRして、
+/// 0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>でカテゴリ・メタデータを取得する。
 /// 取得した<see cref="FileMetadata.OcrText"/>/<see cref="FileMetadata.AiCategory"/>を反映した上で
 /// <see cref="RuleEvaluator"/>を評価するため、これらの条件を持つルールも正しく判定できる。
-/// 該当条件を持つルールが1件も無い場合はOCR/HTTP呼び出しのコストを避けるため一切呼び出さない
+/// 該当条件を持つルールが1件も無い場合は本文抽出/HTTP呼び出しのコストを避けるため一切呼び出さない
 /// （Phase1と同じ挙動）。
 /// </para>
 /// <para>
 /// <b>フォールバック（仕様書§3.1「コンテンツ解析自動リネーム」）</b>: OCR言語パック未インストール・
-/// OCR抽出失敗・Python API呼び出し失敗は、いずれも例外を投げず該当ステップのみをスキップして
+/// 本文抽出失敗・Python API呼び出し失敗は、いずれも例外を投げず該当ステップのみをスキップして
 /// ルールベース仕分けへgracefulに退避する（<see cref="EnrichWithAiMetadataAsync"/>参照）。
 /// </para>
 /// <para>
-/// <b>プライバシー（仕様書§7.2-6）</b>: OCR抽出テキスト全文は<see cref="FileMetadata.OcrText"/>
+/// <b>プライバシー（仕様書§7.2-6）</b>: 抽出テキスト全文は<see cref="FileMetadata.OcrText"/>
 /// （呼び出し元が用意したローカルインスタンス）とPython連携用の一時リクエストにのみ乗り、
 /// <see cref="HistoryRecord"/>を含むDB書き込み・ログ出力の経路には一切渡さない。
 /// </para>
@@ -81,7 +81,7 @@ public sealed class ProcessingCoordinator
     private readonly IHistoryRepository _historyRepository;
     private readonly IFileOperationService _fileOperationService;
     private readonly ISettingsRepository _settingsRepository;
-    private readonly IOcrService? _ocrService;
+    private readonly IContentTextExtractor? _textExtractor;
     private readonly IPythonApiClient? _pythonApiClient;
     private readonly ConflictPolicy _defaultConflictPolicy;
 
@@ -93,7 +93,7 @@ public sealed class ProcessingCoordinator
     /// <param name="fileOperationService">1-8 実ファイル操作サービス（<see cref="Services.FileOperationService"/>）。</param>
     /// <param name="settingsRepository">ルール一覧・<c>ApplyAllMatchingRules</c>設定の取得元。</param>
     /// <param name="ocrService">
-    /// 2-1/2-2 OCR抽出の呼び出し口（<c>WindowsMediaOcrService</c>等）。<c>null</c>の場合、
+    /// 従来のOCR抽出の呼び出し口。<c>null</c>の場合、
     /// <c>ocr_contains</c>/<c>ai_category</c>ルールが存在してもAI解析は行わずルールベースのみで動作する。
     /// </param>
     /// <param name="pythonApiClient">
@@ -111,12 +111,32 @@ public sealed class ProcessingCoordinator
         IOcrService? ocrService = null,
         IPythonApiClient? pythonApiClient = null,
         ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename)
+        : this(
+            ruleEngine,
+            historyRepository,
+            fileOperationService,
+            settingsRepository,
+            (IContentTextExtractor?)ocrService,
+            pythonApiClient,
+            defaultConflictPolicy)
+    {
+    }
+
+    /// <summary>TXT/DOCX直接読み込みを含む汎用本文抽出器を使うコンストラクタ。</summary>
+    public ProcessingCoordinator(
+        IRuleEngine ruleEngine,
+        IHistoryRepository historyRepository,
+        IFileOperationService fileOperationService,
+        ISettingsRepository settingsRepository,
+        IContentTextExtractor? textExtractor,
+        IPythonApiClient? pythonApiClient = null,
+        ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename)
     {
         _ruleEngine = ruleEngine ?? throw new ArgumentNullException(nameof(ruleEngine));
         _historyRepository = historyRepository ?? throw new ArgumentNullException(nameof(historyRepository));
         _fileOperationService = fileOperationService ?? throw new ArgumentNullException(nameof(fileOperationService));
         _settingsRepository = settingsRepository ?? throw new ArgumentNullException(nameof(settingsRepository));
-        _ocrService = ocrService;
+        _textExtractor = textExtractor;
         _pythonApiClient = pythonApiClient;
         _defaultConflictPolicy = defaultConflictPolicy;
     }
@@ -172,8 +192,8 @@ public sealed class ProcessingCoordinator
         List<RuleModel> rules = await _settingsRepository.LoadRulesAsync(ct).ConfigureAwait(false);
 
         // Phase2: ocr_contains/ai_category条件を持つ有効ルールが1件でもある場合のみ、
-        // OCR→AI解析パイプラインを実行してmetadata.OcrText/AiCategoryを埋める。
-        // 対象ルールが無ければコスト（OCR処理・HTTP通信）を避けるため一切呼び出さない（Phase1同様の挙動）。
+        // 本文抽出→AI解析パイプラインを実行してmetadata.OcrText/AiCategoryを埋める。
+        // 対象ルールが無ければ抽出・HTTP通信のコストを避けるため一切呼び出さない（Phase1同様の挙動）。
         AnalyzeResponse? analyzeResponse = RequiresAiEnrichment(rules)
             ? await EnrichWithAiMetadataAsync(metadata, ct).ConfigureAwait(false)
             : null;
@@ -377,8 +397,7 @@ public sealed class ProcessingCoordinator
                   action.Pattern?.Contains("{document_type}", StringComparison.OrdinalIgnoreCase) == true))));
 
     /// <summary>
-    /// Phase2 OCR/AI解析パイプライン: 2-1 <c>PdfToBitmapRenderer</c> → 2-2 <c>WindowsMediaOcrService</c>
-    /// （いずれも<see cref="IOcrService"/>実装内部）でOCR全文を抽出し、
+    /// Phase2 本文抽出/AI解析パイプライン: TXT/DOCXは直接読み込み、PDF/画像はOCRして本文を抽出し、
     /// 0-4 <see cref="IPythonApiClient.AnalyzeAsync"/>で<c>category</c>/<c>metadata</c>を取得する。
     /// 成功した範囲までの結果を<paramref name="metadata"/>（<see cref="FileMetadata.OcrText"/>/
     /// <see cref="FileMetadata.AiCategory"/>）へ反映した上で、リネームpatternの変数展開に使う
@@ -389,11 +408,11 @@ public sealed class ProcessingCoordinator
     /// <b>フォールバック</b>: 以下はいずれも例外を投げず、当該ステップのみをスキップして
     /// ルールベース仕分けへgracefulに退避する（仕様書§3.1「コンテンツ解析自動リネーム」）。
     /// <list type="bullet">
-    /// <item>OCR未構成（<see cref="_ocrService"/>/<see cref="_pythonApiClient"/>が<c>null</c>）</item>
-    /// <item>現在のシステム言語のOCR言語パック未インストール（<see cref="IOcrService.IsLanguagePackAvailableAsync"/>が<c>false</c>）</item>
-    /// <item>OCR抽出失敗（<see cref="IOcrService.ExtractTextAsync"/>が<c>null</c>を返す、または想定外の例外を投げた場合）
+    /// <item>本文抽出未構成（<see cref="_textExtractor"/>/<see cref="_pythonApiClient"/>が<c>null</c>）</item>
+    /// <item>OCR対象で現在のシステム言語パックが利用できない場合</item>
+    /// <item>本文抽出失敗（<see cref="IContentTextExtractor.ExtractTextAsync"/>が<c>null</c>を返す、または想定外の例外を投げた場合）
     /// → この場合Python連携自体を呼び出さない（テキストが無い解析は意味を持たないため）。
-    /// ただし<c>ocr_contains</c>条件はOCR成否そのもので判定するため、OCRが成功していれば
+    /// ただし<c>ocr_contains</c>条件は抽出本文そのもので判定するため、本文抽出が成功していれば
     /// Python解析の成否に関わらず<see cref="FileMetadata.OcrText"/>は設定する。</item>
     /// <item>Python API呼び出し失敗（<see cref="IPythonApiClient.AnalyzeAsync"/>が<c>null</c>を返す・
     /// 例外を投げる・<see cref="AnalyzeResponse.Success"/>が<c>false</c>）→ <c>ai_category</c>は
@@ -401,63 +420,63 @@ public sealed class ProcessingCoordinator
     /// </list>
     /// </para>
     /// <para>
-    /// <b>プライバシー（仕様書§7.2-6）</b>: OCR全文はここで抽出したローカル変数と、Python連携用の
+    /// <b>プライバシー（仕様書§7.2-6）</b>: 抽出本文はここで抽出したローカル変数と、Python連携用の
     /// 一時的な<see cref="AnalyzeRequest"/>にのみ乗る。DB（<see cref="HistoryRecord"/>）・ログへは
     /// 一切書き込まず、Python連携（<see cref="IPythonApiClient.AnalyzeAsync"/>）へ引き渡した直後に
-    /// ローカル参照を破棄する。戻り値の<see cref="AnalyzeResponse"/>自体にはOCR全文を含まない
+    /// ローカル参照を破棄する。戻り値の<see cref="AnalyzeResponse"/>自体には抽出本文を含まない
     /// （<c>category</c>/<c>metadata</c>/<c>confidence</c>のみ）。
     /// </para>
     /// </remarks>
     private async Task<AnalyzeResponse?> EnrichWithAiMetadataAsync(FileMetadata metadata, CancellationToken ct)
     {
-        if (_ocrService is null)
+        if (_textExtractor is null)
         {
-            // OCR依存先が未構成 → ファイル名等の基本ルールへ委ねる。
+            // 本文抽出依存先が未構成 → ファイル名等の基本ルールへ委ねる。
             return null;
         }
 
-        string? ocrText;
+        string? contentText;
         try
         {
-            // 現在のシステム言語のOCR言語パック未インストール検出はIOcrService実装側の責務だが、
-            // ここでも事前チェックとして呼び出し、未インストール時はOCR自体を試みない。
-            if (!await _ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
+            // IOcrServiceを直接注入する既存構成との互換性を維持する。
+            // ContentTextExtractionRouterではTXT/DOCX経路にこの確認を適用しない。
+            if (_textExtractor is IOcrService ocrService &&
+                !await ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
             {
                 return null;
             }
 
-            // 2-1 PdfToBitmapRenderer → 2-2 WindowsMediaOcrService（IOcrService実装内部）でテキスト抽出。
-            ocrText = await _ocrService.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
+            contentText = await _textExtractor.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // IOcrService実装は原則例外を投げず null/false を返す設計だが、予期しない実装の
+            // 本文抽出実装は原則例外を投げずnullを返す設計だが、予期しない実装の
             // 誤りも含め安全側でフォールバックする（本パイプライン全体を止めない）。
-            ocrText = null;
+            contentText = null;
         }
 
-        if (string.IsNullOrWhiteSpace(ocrText))
+        if (string.IsNullOrWhiteSpace(contentText))
         {
-            // OCR失敗（または対象外ファイル）→ Python連携も行わずgracefulに退避。
+            // 本文抽出失敗（または対象外ファイル）→ Python連携も行わずgracefulに退避。
             // ocr_contains/ai_category条件は未設定のまま（RuleEvaluatorは常に不一致として扱う）。
             return null;
         }
 
-        // ocr_contains条件はOCR全文そのものへの一致判定のため、Python解析の成否に関わらずここで設定する。
-        metadata.OcrText = ocrText;
+        // ocr_contains条件は抽出本文への一致判定のため、Python解析の成否に関わらずここで設定する。
+        metadata.OcrText = contentText;
 
         if (_pythonApiClient is null)
         {
-            // Pythonが起動できない環境でもC# OCRだけでocr_contains条件は利用できる。
+            // Pythonが起動できない環境でもC#本文抽出だけでocr_contains条件は利用できる。
             return null;
         }
 
         var request = new AnalyzeRequest
         {
             FilePath = metadata.FullPath,
-            OcrText = ocrText.Length <= AnalyzeRequest.MaxOcrTextLength
-                ? ocrText
-                : ocrText[..AnalyzeRequest.MaxOcrTextLength],
+            OcrText = contentText.Length <= AnalyzeRequest.MaxOcrTextLength
+                ? contentText
+                : contentText[..AnalyzeRequest.MaxOcrTextLength],
             ExtractFields = DefaultExtractFields,
         };
 
@@ -475,11 +494,11 @@ public sealed class ProcessingCoordinator
         }
         finally
         {
-            // OCR全文はPython連携へ引き渡した時点で役目を終える。このメソッド内のローカル参照を
+            // 抽出本文はPython連携へ引き渡した時点で役目を終える。このメソッド内のローカル参照を
             // 明示的に手放す（仕様書§7.2-6: メモリからの速やかな破棄。DB/ログへは元々渡していない）。
             // ※requestオブジェクト自体は書き換えない（呼び出し元/テストが送信内容を検証できるように、
             //   また既にAnalyzeAsync呼び出しが完了済みの短命ローカルDTOを事後変更する必要は無いため）。
-            ocrText = null;
+            contentText = null;
         }
 
         if (response is null || !response.Success)

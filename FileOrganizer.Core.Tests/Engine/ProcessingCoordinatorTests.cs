@@ -1,5 +1,7 @@
+using System.IO.Compression;
 using FileOrganizer.Core.Database;
 using FileOrganizer.Core.Engine;
+using FileOrganizer.Core.Extraction;
 using FileOrganizer.Core.Services;
 using FileOrganizer.Core.Watcher;
 using FileOrganizer.Shared.Contracts;
@@ -164,6 +166,28 @@ public class ProcessingCoordinatorTests : IDisposable
         return path;
     }
 
+    private string CreateDocxSourceFile(string fileName, string content)
+    {
+        string path = Path.Combine(_sourceDir, fileName);
+        using var archive = ZipFile.Open(path, ZipArchiveMode.Create);
+        ZipArchiveEntry entry = archive.CreateEntry("word/document.xml");
+        using Stream stream = entry.Open();
+        var document = new System.Xml.Linq.XDocument(
+            new System.Xml.Linq.XElement(
+                System.Xml.Linq.XName.Get("document", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                new System.Xml.Linq.XElement(
+                    System.Xml.Linq.XName.Get("body", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                    new System.Xml.Linq.XElement(
+                        System.Xml.Linq.XName.Get("p", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                        new System.Xml.Linq.XElement(
+                            System.Xml.Linq.XName.Get("r", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                            new System.Xml.Linq.XElement(
+                                System.Xml.Linq.XName.Get("t", "http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                                content))))));
+        document.Save(stream);
+        return path;
+    }
+
     private static FileMetadata BuildMetadata(string path)
     {
         var info = new FileInfo(path);
@@ -197,7 +221,7 @@ public class ProcessingCoordinatorTests : IDisposable
         FakeSettingsRepository settingsRepository,
         IHistoryRepository? historyRepository = null,
         ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename,
-        IOcrService? ocrService = null,
+        IContentTextExtractor? textExtractor = null,
         IPythonApiClient? pythonApiClient = null)
     {
         return new ProcessingCoordinator(
@@ -205,7 +229,7 @@ public class ProcessingCoordinatorTests : IDisposable
             historyRepository: historyRepository ?? _realRepository,
             fileOperationService: new FileOperationService(watchSuppressor: null, renameConflictPolicy: defaultConflictPolicy),
             settingsRepository: settingsRepository,
-            ocrService: ocrService,
+            textExtractor: textExtractor,
             pythonApiClient: pythonApiClient,
             defaultConflictPolicy: defaultConflictPolicy);
     }
@@ -428,7 +452,40 @@ public class ProcessingCoordinatorTests : IDisposable
         Assert.False(File.Exists(sourcePath)); // ゴミ箱送りにより元ファイルは消える
     }
 
-    // --- Phase2: OCR/AI解析パイプライン（2-1/2-2 OCR → 0-4 PythonApiClient.AnalyzeAsync） -----------
+    // --- Phase2: 本文抽出/AI解析パイプライン → PythonApiClient.AnalyzeAsync ----------------
+
+    [Theory]
+    [InlineData("txt")]
+    [InlineData("docx")]
+    public async Task ProcessAsync_TXT_DOCXはOCRを使わず直接抽出した本文をPythonへ渡す(string extension)
+    {
+        const string body = "請求書 発行元: サンプル株式会社 請求日: 2026年9月4日";
+        string sourcePath = extension == "txt"
+            ? CreateSourceFile("direct.txt", body)
+            : CreateDocxSourceFile("direct.docx", body);
+        var settings = new FakeSettingsRepository
+        {
+            Rules =
+            {
+                CreateRule("請求書を移動", Cond("ai_category", "equals", "請求書"), MoveTo(_destDir)),
+            },
+        };
+        var ocr = new FakeOcrService { LanguagePackAvailable = false };
+        var python = new FakePythonApiClient
+        {
+            ResponseToReturn = new AnalyzeResponse { Success = true, Category = "請求書" },
+        };
+        var extractor = new ContentTextExtractionRouter(ocr);
+        var coordinator = CreateCoordinator(settings, textExtractor: extractor, pythonApiClient: python);
+
+        IReadOnlyList<HistoryRecord> records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
+
+        Assert.Single(records);
+        Assert.Equal(0, ocr.ExtractTextCallCount);
+        Assert.Equal(1, python.AnalyzeCallCount);
+        Assert.Contains("請求書", python.LastRequest!.OcrText);
+        Assert.True(File.Exists(Path.Combine(_destDir, Path.GetFileName(sourcePath))));
+    }
 
     [Fact]
     public async Task ProcessAsync_ocr_containsルールがOCR抽出結果に一致すればそのルールが適用される()
@@ -440,7 +497,7 @@ public class ProcessingCoordinatorTests : IDisposable
         };
         var ocr = new FakeOcrService { OcrTextToReturn = "株式会社サンプル 請求書 2026年8月25日" };
         var python = new FakePythonApiClient(); // AnalyzeAsyncは呼ばれるが、この検証では戻り値は使わない
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: python);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -458,7 +515,7 @@ public class ProcessingCoordinatorTests : IDisposable
             Rules = { CreateRule("OCRだけで分類", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir)) },
         };
         var ocr = new FakeOcrService { OcrTextToReturn = "請求書 2026年8月25日" };
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: null);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: null);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -489,7 +546,7 @@ public class ProcessingCoordinatorTests : IDisposable
                 Metadata = new Dictionary<string, string> { ["date"] = "2026-08-25", ["company"] = "サンプル株式会社" },
             },
         };
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: python);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -519,7 +576,7 @@ public class ProcessingCoordinatorTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
         var ocr = new FakeOcrService { ThrowOnExtract = true }; // OCR実装が例外を投げるケースも想定
         var python = new FakePythonApiClient();
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: python);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -544,7 +601,7 @@ public class ProcessingCoordinatorTests : IDisposable
         Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
         var ocr = new FakeOcrService { OcrTextToReturn = "何らかのテキスト" };
         var python = new FakePythonApiClient { ThrowOnAnalyze = true };
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: python);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -567,7 +624,7 @@ public class ProcessingCoordinatorTests : IDisposable
         };
         Directory.CreateDirectory(Path.Combine(_workDir, "destB"));
         var ocr = new FakeOcrService { LanguagePackAvailable = false };
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: new FakePythonApiClient());
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: new FakePythonApiClient());
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 
@@ -586,7 +643,7 @@ public class ProcessingCoordinatorTests : IDisposable
         };
         var ocr = new FakeOcrService { OcrTextToReturn = "無視されるはずのテキスト" };
         var python = new FakePythonApiClient();
-        var coordinator = CreateCoordinator(settings, ocrService: ocr, pythonApiClient: python);
+        var coordinator = CreateCoordinator(settings, textExtractor: ocr, pythonApiClient: python);
 
         var records = await coordinator.ProcessAsync(BuildMetadata(sourcePath));
 

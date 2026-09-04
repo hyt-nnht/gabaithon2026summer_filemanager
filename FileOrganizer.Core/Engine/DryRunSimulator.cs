@@ -71,7 +71,7 @@ public sealed class DryRunSimulator
 {
     private readonly IRuleEngine _ruleEngine;
     private readonly ConflictPolicy _defaultConflictPolicy;
-    private readonly IOcrService? _ocrService;
+    private readonly IContentTextExtractor? _textExtractor;
     private readonly IPythonApiClient? _pythonApiClient;
 
     /// <param name="ruleEngine">1-7 ルール評価エンジン（<see cref="RuleEvaluator"/>）。</param>
@@ -84,10 +84,20 @@ public sealed class DryRunSimulator
         ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename,
         IOcrService? ocrService = null,
         IPythonApiClient? pythonApiClient = null)
+        : this(ruleEngine, ocrService, pythonApiClient, defaultConflictPolicy)
+    {
+    }
+
+    /// <summary>TXT/DOCX直接読み込みを含む汎用本文抽出器を使うコンストラクタ。</summary>
+    public DryRunSimulator(
+        IRuleEngine ruleEngine,
+        IContentTextExtractor? textExtractor,
+        IPythonApiClient? pythonApiClient = null,
+        ConflictPolicy defaultConflictPolicy = ConflictPolicy.AutoRename)
     {
         _ruleEngine = ruleEngine ?? throw new ArgumentNullException(nameof(ruleEngine));
         _defaultConflictPolicy = defaultConflictPolicy;
-        _ocrService = ocrService;
+        _textExtractor = textExtractor;
         _pythonApiClient = pythonApiClient;
     }
 
@@ -143,7 +153,8 @@ public sealed class DryRunSimulator
 
     /// <summary>
     /// Drop Zone等で指定されたファイルだけをプレビューする。AI条件がある場合は実処理と同じく
-    /// C# OCRで本文を得てPythonへ本文だけを渡す（Pythonは<c>FilePath</c>を開かない）。
+    /// TXT/DOCXは直接、PDF/画像はOCRで本文を取得してPythonへ本文だけを渡す
+    /// （Pythonは<c>FilePath</c>を開かない）。
     /// </summary>
     public async Task<IReadOnlyList<DryRunPlanEntry>> SimulateFilesAsync(
         IEnumerable<FileMetadata> files,
@@ -393,19 +404,20 @@ public sealed class DryRunSimulator
 
     private async Task<AnalyzeResponse?> TryEnrichAsync(FileMetadata metadata, CancellationToken ct)
     {
-        if (_ocrService is null)
+        if (_textExtractor is null)
         {
             return null;
         }
 
         try
         {
-            if (!await _ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
+            if (_textExtractor is IOcrService ocrService &&
+                !await ocrService.IsLanguagePackAvailableAsync().ConfigureAwait(false))
             {
                 return null;
             }
 
-            string? text = await _ocrService.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
+            string? text = await _textExtractor.ExtractTextAsync(metadata.FullPath, ct).ConfigureAwait(false);
             if (string.IsNullOrWhiteSpace(text))
             {
                 return null;
@@ -434,7 +446,7 @@ public sealed class DryRunSimulator
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // OCR/AI失敗時はファイル名等の基本ルールへgracefulに退避する。
+            // 本文抽出/AI失敗時はファイル名等の基本ルールへgracefulに退避する。
         }
 
         return null;

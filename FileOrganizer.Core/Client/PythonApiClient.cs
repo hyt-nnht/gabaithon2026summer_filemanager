@@ -152,7 +152,7 @@ public sealed class PythonApiClient : IPythonApiClient, IDisposable
         ArgumentNullException.ThrowIfNull(request);
         EnsureConfigured();
 
-        // 通常IPCではPythonに実ファイルを開かせない。OCR本文が無い場合はHTTP送信せず、
+        // 通常IPCではPythonに実ファイルを開かせない。抽出本文が無い場合はHTTP送信せず、
         // 呼び出し元のルールベースフォールバックへ戻す。
         if (string.IsNullOrWhiteSpace(request.OcrText))
         {

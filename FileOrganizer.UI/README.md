@@ -25,16 +25,16 @@ ViewModelからの呼び出しはすべて `Services/IFrontendBackendGateway.cs`
 | 今すぐ整理のプレビュー | `DryRunSimulator` | 実I/Oなし。隠し/システム/ReparsePointを除外し、同名衝突を予測 |
 | Dry Run承認後の実行 | `ProcessingCoordinator` | 全ファイルのサイズ・更新日時・ルール結果を先に再検証してから2フェーズ実行 |
 | Undo | `IUndoManager` | `RequiresConfirmation` は自動実行せず画面で案内。Recycleは対象外 |
-| OCR/AI状態 | `IOcrService`, `IPythonApiClient` | OCR失敗時はルールベースへフォールバック。本文は永続化しない |
-| 診断ログ | `LogMasker` + ZIP出力 | パスをSHA-256化し、個人情報をマスク。OCR本文は出力しない |
+| OCR/AI状態 | `IContentTextExtractor`, `IPythonApiClient` | 本文抽出失敗時はルールベースへフォールバック。本文は永続化しない |
+| 診断ログ | `LogMasker` + ZIP出力 | パスをSHA-256化し、個人情報をマスク。抽出本文は出力しない |
 
 アプリ起動時は監視を開始しますが、その時点ですでに存在するファイルを自動投入しません。既存ファイルは「今すぐ整理」のDry Runで確認した場合だけ処理します。新しく作成・変更されたファイルは、デバウンスと2回の静止確認を通過してからルール評価されます。
 
 Production版の起動順は `DatabaseInitializer` → `StartupRecoveryService` → `PythonProcessManager` → stdoutの `PORT:` を使った `IPythonApiClient.Configure` → `IWatcherService.StartAsync` とします。終了時は監視を止めてからPythonのJob Objectを破棄します。この順序にすることで、未復旧履歴が残ったまま新しい監視イベントを処理したり、IPC接続前にAI解析を始めたりすることを防ぎます。
 
-## OCRとPythonの境界
+## 本文抽出とPythonの境界
 
-ファイルを開く担当はC#の `WindowsMediaOcrService` です。通常IPCでは、Pythonへ渡す `file_path` は表示名・拡張子を知るためのメタデータにすぎません。Pythonの `/api/v1/analyze` はこのパスを解決・検査・読込せず、必須の `ocr_text` だけを解析します。OCR本文は履歴DBや診断ログへ保存しません。Pythonを起動できない場合も、拡張子・名前・サイズ・経過日数などの基本ルールは動作します。
+ファイルを開く担当はC#側で、TXTとDOCXは本文を直接読み、PDFと画像は `WindowsMediaOcrService` でOCRします。通常IPCでは、Pythonへ渡す `file_path` は表示名・拡張子を知るためのメタデータにすぎません。Pythonの `/api/v1/analyze` はこのパスを解決・検査・読込せず、必須の `ocr_text`（抽出本文）だけを解析します。抽出本文は履歴DBや診断ログへ保存しません。Pythonを起動できない場合も、拡張子・名前・サイズ・経過日数などの基本ルールは動作します。
 
 ## 初心者向け: ボタンを押した後の流れ
 

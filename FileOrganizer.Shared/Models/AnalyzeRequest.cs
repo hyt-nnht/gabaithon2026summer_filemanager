@@ -12,7 +12,7 @@ public class AnalyzeRequest
     [JsonPropertyName("file_path")]
     public string FilePath { get; set; } = string.Empty;
 
-    /// <summary>C#のWindows OCRで抽出した本文。通常IPCでは必須。</summary>
+    /// <summary>C#でOCRまたはTXT/DOCXから直接抽出した本文。通常IPCでは必須。</summary>
     [JsonPropertyName("ocr_text")]
     public string OcrText { get; set; } = string.Empty;
 

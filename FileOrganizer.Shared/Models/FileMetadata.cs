@@ -12,6 +12,6 @@ public class FileMetadata
     public DateTime LastWriteTimeUtc { get; set; }
     public DateTime CreatedTimeUtc { get; set; }
     public double DaysOld => (DateTime.UtcNow - LastWriteTimeUtc).TotalDays;
-    public string? OcrText { get; set; }        // OCR結果があれば設定（DB永続化しない前提）
+    public string? OcrText { get; set; }        // OCRまたは直接抽出した本文（DB永続化しない前提）
     public string? AiCategory { get; set; }      // Python分析結果があれば設定
 }

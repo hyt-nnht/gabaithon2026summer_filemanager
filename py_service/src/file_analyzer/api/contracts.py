@@ -33,7 +33,7 @@ class AnalyzeRequest(BaseModel):
     ocr_text: str = Field(
         min_length=1,
         max_length=100_000,
-        description="Text extracted by Windows OCR in the C# process.",
+        description="Text extracted by Windows OCR or read directly from TXT/DOCX in the C# process.",
     )
     extract_fields: list[str]
 

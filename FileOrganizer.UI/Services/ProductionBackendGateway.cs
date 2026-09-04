@@ -5,6 +5,7 @@ using System.Text;
 using FileOrganizer.Core.Client;
 using FileOrganizer.Core.Database;
 using FileOrganizer.Core.Engine;
+using FileOrganizer.Core.Extraction;
 using FileOrganizer.Core.Services;
 using FileOrganizer.Core.Utils;
 using FileOrganizer.Core.Watcher;
@@ -35,7 +36,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
     private DryRunSimulator? _dryRunSimulator;
     private UndoManager? _undoManager;
     private WalMaintenanceService? _walMaintenance;
-    private WindowsMediaOcrService? _ocrService;
+    private IContentTextExtractor? _textExtractor;
     private PythonApiClient? _pythonApiClient;
     private PythonServiceSupervisor? _pythonSupervisor;
     private ModelDownloadManager? _modelDownloadManager;
@@ -342,7 +343,7 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
             _walMaintenance = new WalMaintenanceService(
                 _connectionString,
                 Math.Max(1, _settings.WalCheckpointIntervalMinutes));
-            _ocrService = new WindowsMediaOcrService();
+            _textExtractor = new ContentTextExtractionRouter(new WindowsMediaOcrService());
 
             await TryStartPythonAsync(_settings, ct).ConfigureAwait(false);
             await RebuildProcessingPipelineAsync(_settings).ConfigureAwait(false);
@@ -471,12 +472,12 @@ public sealed class ProductionBackendGateway : IFrontendBackendGateway, IAsyncDi
             _historyRepository!,
             fileOperations,
             _settingsRepository,
-            _ocrService,
+            _textExtractor,
             aiClient);
         _coordinator.ProcessingCompleted += (_, args) =>
             ActivityOccurred?.Invoke(this, new BackendActivityEventArgs(
                 args.Records.Count == 0 ? null : $"{Path.GetFileName(args.SourceFullPath)} を整理しました。"));
-        _dryRunSimulator = new DryRunSimulator(ruleEngine, ConflictPolicy.AutoRename, _ocrService, aiClient);
+        _dryRunSimulator = new DryRunSimulator(ruleEngine, _textExtractor, aiClient, ConflictPolicy.AutoRename);
         _undoManager = new UndoManager(_historyRepository!, fileOperations);
     }
 
