@@ -139,7 +139,18 @@
                                 </Grid.ColumnDefinitions>
                                 <StackPanel>
                                     <TextBlock Text="監視フォルダ" Style="{StaticResource CaptionStyle}" Margin="0,0,0,6" />
-                                    <TextBox Text="{Binding WatchFolder, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="8" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Text="{Binding WatchFolder, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}" />
+                                        <Button Grid.Column="2" Content="参照..." Command="{Binding DataContext.BrowseWatchFolderCommand, ElementName=Root}"
+                                                Style="{StaticResource SecondaryButtonStyle}" Padding="12,7" MinHeight="32" />
+                                    </Grid>
+                                    <TextBlock Text="例: C:\Users\name\Downloads（このフォルダ直下に追加されたファイルが対象）"
+                                               Style="{StaticResource CaptionStyle}" Margin="0,5,0,0" />
                                 </StackPanel>
                                 <CheckBox Grid.Column="1" Content="このルールを有効にする" IsChecked="{Binding Enabled}"
                                           Style="{StaticResource CheckBoxStyle}" Margin="18,21,0,0" VerticalAlignment="Top" />
@@ -150,31 +161,36 @@
                                 <Button Content="＋ 条件を追加" Command="{Binding DataContext.AddConditionCommand, ElementName=Root}"
                                         Style="{StaticResource GhostButtonStyle}" HorizontalAlignment="Right" />
                             </Grid>
+                            <TextBlock Style="{StaticResource CaptionStyle}" Margin="0,0,0,10" TextWrapping="Wrap"
+                                       Text="例1: 拡張子 が 等しい .pdf ／ 例2: ファイル名 が 含む 見積書 ／ 例3: サイズ(MB) が より大きい 10 ／ 例4: 経過日数 が より大きい 30" />
 
                             <ItemsControl ItemsSource="{Binding Conditions}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
                                         <Border Background="#F8F9FC" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                                 CornerRadius="10" Padding="12" Margin="0,0,0,8">
-                                            <Grid>
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="1.2*" />
-                                                    <ColumnDefinition Width="10" />
-                                                    <ColumnDefinition Width="1.1*" />
-                                                    <ColumnDefinition Width="10" />
-                                                    <ColumnDefinition Width="2*" />
-                                                    <ColumnDefinition Width="42" />
-                                                </Grid.ColumnDefinitions>
-                                                <ComboBox Grid.Column="0" ItemsSource="{x:Static vm:ConditionEditorViewModel.TypeOptions}"
-                                                          DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Type}"
-                                                          Style="{StaticResource ComboBoxStyle}" />
-                                                <ComboBox Grid.Column="2" ItemsSource="{x:Static vm:ConditionEditorViewModel.OperatorOptions}"
-                                                          DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Operator}"
-                                                          Style="{StaticResource ComboBoxStyle}" />
-                                                <TextBox Grid.Column="4" Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}" />
-                                                <Button Grid.Column="5" Content="×" Command="{Binding DataContext.RemoveConditionCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
-                                                        CommandParameter="{Binding}" Style="{StaticResource IconButtonStyle}" />
-                                            </Grid>
+                                            <StackPanel>
+                                                <Grid>
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="1.2*" />
+                                                        <ColumnDefinition Width="10" />
+                                                        <ColumnDefinition Width="1.1*" />
+                                                        <ColumnDefinition Width="10" />
+                                                        <ColumnDefinition Width="2*" />
+                                                        <ColumnDefinition Width="42" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <ComboBox Grid.Column="0" ItemsSource="{x:Static vm:ConditionEditorViewModel.TypeOptions}"
+                                                              DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Type}"
+                                                              Style="{StaticResource ComboBoxStyle}" />
+                                                    <ComboBox Grid.Column="2" ItemsSource="{x:Static vm:ConditionEditorViewModel.OperatorOptions}"
+                                                              DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding Operator}"
+                                                              Style="{StaticResource ComboBoxStyle}" />
+                                                    <TextBox Grid.Column="4" Text="{Binding Value, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}" />
+                                                    <Button Grid.Column="5" Content="×" Command="{Binding DataContext.RemoveConditionCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
+                                                            CommandParameter="{Binding}" Style="{StaticResource IconButtonStyle}" />
+                                                </Grid>
+                                                <TextBlock Text="{Binding ValueExample}" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" />
+                                            </StackPanel>
                                         </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
@@ -187,6 +203,8 @@
                                 <Button Content="＋ アクションを追加" Command="{Binding DataContext.AddActionCommand, ElementName=Root}"
                                         Style="{StaticResource GhostButtonStyle}" HorizontalAlignment="Right" />
                             </Grid>
+                            <TextBlock Style="{StaticResource CaptionStyle}" Margin="0,0,0,10" TextWrapping="Wrap"
+                                       Text="移動・コピーの整理先はフォルダ、名前を変更するはトークンを含む命名パターンを指定します。" />
 
                             <ItemsControl ItemsSource="{Binding Actions}">
                                 <ItemsControl.ItemTemplate>
@@ -205,8 +223,20 @@
                                                           Style="{StaticResource ComboBoxStyle}" />
                                                 <StackPanel Grid.Column="2">
                                                     <TextBlock Text="{Binding ArgumentLabel}" Style="{StaticResource CaptionStyle}" Margin="0,0,0,4" />
-                                                    <TextBox Text="{Binding Argument, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}"
-                                                             IsEnabled="{Binding HasArgument}" />
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="8" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <TextBox Text="{Binding Argument, UpdateSourceTrigger=PropertyChanged}" Style="{StaticResource TextBoxStyle}"
+                                                                 IsEnabled="{Binding HasArgument}" />
+                                                        <Button Grid.Column="2" Content="参照..." Command="{Binding DataContext.BrowseActionDestinationCommand, ElementName=Root}"
+                                                                CommandParameter="{Binding}" Style="{StaticResource SecondaryButtonStyle}" Padding="12,7" MinHeight="32"
+                                                                Visibility="{Binding IsFolderArgument, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                                    </Grid>
+                                                    <TextBlock Text="{Binding ArgumentExample}" Style="{StaticResource CaptionStyle}" Margin="0,6,0,0" TextWrapping="Wrap"
+                                                               Visibility="{Binding HasArgument, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                                 </StackPanel>
                                                 <Button Grid.Column="3" Content="×" Command="{Binding DataContext.RemoveActionCommand, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}}"
                                                         CommandParameter="{Binding}" Style="{StaticResource IconButtonStyle}" />

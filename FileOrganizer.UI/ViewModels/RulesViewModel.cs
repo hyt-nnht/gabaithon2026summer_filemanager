@@ -7,6 +7,7 @@ using System.Text.Json;
 using FileOrganizer.Shared.Models;
 using FileOrganizer.UI.Mvvm;
 using FileOrganizer.UI.Services;
+using Microsoft.Win32;
 
 namespace FileOrganizer.UI.ViewModels;
 
@@ -53,6 +54,14 @@ public sealed class RulesViewModel : ObservableObject
                 MarkChanged();
             }
         });
+        BrowseWatchFolderCommand = new RelayCommand(BrowseWatchFolder, () => SelectedRule is not null);
+        BrowseActionDestinationCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is not ActionEditorViewModel action) return;
+            var dialog = new OpenFolderDialog { Title = "整理先フォルダーを選択", Multiselect = false };
+            if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.FolderName)) return;
+            action.Argument = dialog.FolderName;
+        });
         SaveCommand = new AsyncRelayCommand(SaveAsync, () => Rules.Count > 0);
     }
 
@@ -66,6 +75,8 @@ public sealed class RulesViewModel : ObservableObject
     public RelayCommand RemoveConditionCommand { get; }
     public RelayCommand AddActionCommand { get; }
     public RelayCommand RemoveActionCommand { get; }
+    public RelayCommand BrowseWatchFolderCommand { get; }
+    public RelayCommand BrowseActionDestinationCommand { get; }
     public AsyncRelayCommand SaveCommand { get; }
 
     public RuleItemViewModel? SelectedRule
@@ -171,6 +182,15 @@ public sealed class RulesViewModel : ObservableObject
         NotifyCommandStates();
     }
 
+    private void BrowseWatchFolder()
+    {
+        if (SelectedRule is null) return;
+
+        var dialog = new OpenFolderDialog { Title = "監視するフォルダーを選択", Multiselect = false };
+        if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.FolderName)) return;
+        SelectedRule.WatchFolder = dialog.FolderName;
+    }
+
     private async Task SaveAsync()
     {
         try
@@ -201,6 +221,7 @@ public sealed class RulesViewModel : ObservableObject
         DuplicateCommand.NotifyCanExecuteChanged();
         AddConditionCommand.NotifyCanExecuteChanged();
         AddActionCommand.NotifyCanExecuteChanged();
+        BrowseWatchFolderCommand.NotifyCanExecuteChanged();
         SaveCommand.NotifyCanExecuteChanged();
     }
 }
@@ -328,9 +349,46 @@ public sealed class ConditionEditorViewModel : ObservableObject
         new SelectionOption("in", "いずれか")
     };
 
-    public string Type { get => _type; set => SetProperty(ref _type, value); }
-    public string Operator { get => _operator; set => SetProperty(ref _operator, value); }
+    public string Type
+    {
+        get => _type;
+        set
+        {
+            if (SetProperty(ref _type, value))
+                OnPropertyChanged(nameof(ValueExample));
+        }
+    }
+
+    public string Operator
+    {
+        get => _operator;
+        set
+        {
+            if (SetProperty(ref _operator, value))
+                OnPropertyChanged(nameof(ValueExample));
+        }
+    }
+
     public string Value { get => _value; set => SetProperty(ref _value, value); }
+
+    /// <summary>種類・演算子に応じた入力例（プレースホルダー用）。</summary>
+    public string ValueExample
+    {
+        get
+        {
+            string baseExample = Type switch
+            {
+                "extension" => "例: .pdf",
+                "filename" => "例: 見積書",
+                "size_mb" => "例: 10",
+                "days_old" => "例: 30",
+                "ocr_contains" => "例: 領収書",
+                "ai_category" => "例: finance",
+                _ => "例: 値"
+            };
+            return Operator == "in" ? baseExample + "（カンマ区切りで複数指定可: .jpg, .png）" : baseExample;
+        }
+    }
 
     public RuleCondition ToModel()
     {
@@ -387,6 +445,8 @@ public sealed class ActionEditorViewModel : ObservableObject
             {
                 OnPropertyChanged(nameof(ArgumentLabel));
                 OnPropertyChanged(nameof(HasArgument));
+                OnPropertyChanged(nameof(ArgumentExample));
+                OnPropertyChanged(nameof(IsFolderArgument));
             }
         }
     }
@@ -394,6 +454,17 @@ public sealed class ActionEditorViewModel : ObservableObject
     public string Argument { get => _argument; set => SetProperty(ref _argument, value); }
     public string ArgumentLabel => Type == "rename" ? "命名パターン" : Type == "recycle" ? "追加設定なし" : "整理先フォルダ";
     public bool HasArgument => Type != "recycle";
+
+    /// <summary>「参照...」ボタンを出すべきか（移動・コピー先はフォルダ選択、名前変更は文字列パターンのため対象外）。</summary>
+    public bool IsFolderArgument => Type is "move" or "copy";
+
+    /// <summary>アクション種別に応じた入力例。命名パターンは使えるトークンと変換結果の例を示す。</summary>
+    public string ArgumentExample => Type switch
+    {
+        "rename" => "例: {filename}_{category}{ext} → 見積書_finance.pdf　※使えるトークン: {filename}(元のファイル名) {ext}(拡張子) {category}(AI分類結果)",
+        "recycle" => string.Empty,
+        _ => @"例: C:\Users\name\Documents\請求書"
+    };
 
     public RuleAction ToModel() => new()
     {
