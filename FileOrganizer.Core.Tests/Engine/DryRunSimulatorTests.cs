@@ -1,5 +1,6 @@
 using System.Linq;
 using FileOrganizer.Core.Engine;
+using FileOrganizer.Core.Extraction;
 using FileOrganizer.Shared.Models;
 
 namespace FileOrganizer.Core.Tests.Engine;
@@ -258,7 +259,7 @@ public class DryRunSimulatorTests : IDisposable
     {
         string sourcePath = CreateSourceFile("invoice.pdf");
         var ocr = new FakeOcrService { OcrTextToReturn = "請求書 発行日 2026年8月25日" };
-        var simulator = new DryRunSimulator(new RuleEvaluator(), ocrService: ocr, pythonApiClient: null);
+        var simulator = new DryRunSimulator(new RuleEvaluator(), textExtractor: ocr, pythonApiClient: null);
         var rules = new List<RuleModel>
         {
             CreateRule("OCR分類", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir))
@@ -269,6 +270,28 @@ public class DryRunSimulatorTests : IDisposable
 
         Assert.True(Assert.Single(result).IsMatched);
         Assert.Equal(1, ocr.ExtractTextCallCount);
+        Assert.True(File.Exists(sourcePath));
+    }
+
+    [Fact]
+    public async Task SimulateFilesAsync_TXTはOCRを使わず直接抽出した本文で分類できる()
+    {
+        string sourcePath = CreateSourceFile("invoice.txt", "請求書 発行元: サンプル株式会社");
+        var ocr = new FakeOcrService { LanguagePackAvailable = false };
+        var simulator = new DryRunSimulator(
+            new RuleEvaluator(),
+            textExtractor: new ContentTextExtractionRouter(ocr),
+            pythonApiClient: null);
+        var rules = new List<RuleModel>
+        {
+            CreateRule("本文で分類", Cond("ocr_contains", "contains", "請求書"), MoveTo(_destDir)),
+        };
+
+        DryRunPlanEntry entry = Assert.Single(await simulator.SimulateFilesAsync(
+            new[] { BuildMetadata(sourcePath) }, rules, applyAllMatchingRules: false));
+
+        Assert.True(entry.IsMatched);
+        Assert.Equal(0, ocr.ExtractTextCallCount);
         Assert.True(File.Exists(sourcePath));
     }
 
@@ -286,7 +309,7 @@ public class DryRunSimulatorTests : IDisposable
                 ClassificationSource = "slm",
             },
         };
-        var simulator = new DryRunSimulator(new RuleEvaluator(), ocrService: ocr, pythonApiClient: python);
+        var simulator = new DryRunSimulator(new RuleEvaluator(), textExtractor: ocr, pythonApiClient: python);
         var rules = new List<RuleModel>
         {
             CreateRule("AI請求書分類", Cond("ai_category", "equals", "請求書"), MoveTo(_destDir)),

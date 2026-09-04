@@ -335,7 +335,7 @@ public sealed class ConditionEditorViewModel : ObservableObject
         new SelectionOption("filename", "ファイル名"),
         new SelectionOption("size_mb", "サイズ (MB)"),
         new SelectionOption("days_old", "経過日数"),
-        new SelectionOption("ocr_contains", "OCRテキスト"),
+        new SelectionOption("ocr_contains", "本文テキスト"),
         new SelectionOption("ai_category", "AIカテゴリ")
     };
 

@@ -84,7 +84,7 @@ public sealed class PythonServiceSupervisor : IPythonApiClient, IAsyncDisposable
     /// </summary>
     public event EventHandler<PythonServiceDegradedEventArgs>? ServiceDegraded;
 
-    /// <summary>OCR本文をPythonへ渡した分類処理の開始時と完了時に発火する。</summary>
+    /// <summary>抽出本文をPythonへ渡した分類処理の開始時と完了時に発火する。</summary>
     public event EventHandler<PythonAnalysisStateChangedEventArgs>? AnalysisStateChanged;
 
     /// <summary>現在の連続失敗回数（成功のたびに0へリセットされる）。</summary>
@@ -147,7 +147,7 @@ public sealed class PythonServiceSupervisor : IPythonApiClient, IAsyncDisposable
         ArgumentNullException.ThrowIfNull(modelDownloadManager);
 
         // リスポーン後も初回と同じモデル設定を子プロセスへ渡すため保持する。
-        // OCR本文やファイル内容は保持しない。
+        // 抽出本文やファイル内容は保持しない。
         _startupSettings = settings;
         _modelDownloadManager = modelDownloadManager;
 

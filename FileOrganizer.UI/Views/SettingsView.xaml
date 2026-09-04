@@ -122,7 +122,7 @@
                     <Border Style="{StaticResource CardStyle}" Margin="0,0,0,18">
                         <StackPanel>
                             <TextBlock Text="ローカルAI" Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="解析はPC内で完結し、OCR本文は保存しません。" Style="{StaticResource CaptionStyle}" Margin="0,4,0,16" />
+                            <TextBlock Text="解析はPC内で完結し、抽出本文は保存しません。" Style="{StaticResource CaptionStyle}" Margin="0,4,0,16" />
 
                             <CheckBox Content="デモ用の事前配置モデルを使用" IsChecked="{Binding UsePreloadedSlmModel}"
                                       Style="{StaticResource CheckBoxStyle}" />
@@ -168,7 +168,7 @@
                             <TextBox Text="{Binding QuickLookShortcut}" Style="{StaticResource TextBoxStyle}" IsEnabled="{Binding IsQuickLookEnabled}" />
                             <Button Content="診断ログを出力" Command="{Binding ExportDiagnosticsCommand}"
                                     Style="{StaticResource SecondaryButtonStyle}" Margin="0,16,0,0" />
-                            <TextBlock Text="ファイル名・OCR本文・個人情報をマスクして出力します。"
+                            <TextBlock Text="ファイル名・抽出本文・個人情報をマスクして出力します。"
                                        Style="{StaticResource CaptionStyle}" Margin="0,7,0,0" />
                         </StackPanel>
                     </Border>
