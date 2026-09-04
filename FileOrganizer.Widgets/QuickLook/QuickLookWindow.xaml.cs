@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Media;
 using WpfInput = System.Windows.Input;
 
 namespace FileOrganizer.Widgets.QuickLook;
@@ -18,6 +19,18 @@ public partial class QuickLookWindow : Window
     public void ShowPreview(QuickLookPresentation presentation)
     {
         DataContext = presentation;
+
+        // PDFはページ画像、それ以外（テキスト等）は文字列で表示するため、
+        // どちらか一方だけを可視化する（ImageSourceの有無で判定）。
+        bool hasImage = presentation.PreviewImage is not null;
+        PreviewImageControl.Source = presentation.PreviewImage;
+        ImagePreviewScroll.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+        TextPreviewScroll.Visibility = hasImage ? Visibility.Collapsed : Visibility.Visible;
+
+        // 前回の表示がスクロールされたままだと、次のファイルを開いた瞬間に先頭が見えない。
+        ImagePreviewScroll.ScrollToHome();
+        TextPreviewScroll.ScrollToHome();
+
         Show();
         Activate();
         Focus();
@@ -41,7 +54,8 @@ public sealed record QuickLookPresentation(
     string KindGlyph,
     string KindLabel,
     string DetailLabel,
-    string PreviewText)
+    string PreviewText,
+    ImageSource? PreviewImage = null)
 {
     public static QuickLookPresentation Empty { get; } = new(
         "プレビューするファイルがありません",
