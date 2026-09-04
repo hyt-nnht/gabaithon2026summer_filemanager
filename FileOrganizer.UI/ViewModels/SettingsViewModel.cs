@@ -31,6 +31,23 @@ public sealed class SettingsViewModel : ObservableObject
             if (parameter is WatchFolderItemViewModel folder)
                 WatchFolders.Remove(folder);
         });
+        BrowseFolderCommand = new RelayCommand(parameter =>
+        {
+            if (parameter is not WatchFolderItemViewModel folder) return;
+            var dialog = new OpenFolderDialog { Title = "監視するフォルダーを選択", Multiselect = false };
+            if (dialog.ShowDialog() != true || string.IsNullOrWhiteSpace(dialog.FolderName)) return;
+            folder.Path = dialog.FolderName;
+        });
+        BrowseSlmModelCommand = new RelayCommand(() =>
+        {
+            var dialog = new OpenFileDialog
+            {
+                Title = "SLMモデルファイルを選択",
+                Filter = "GGUFモデル (*.gguf)|*.gguf|すべてのファイル (*.*)|*.*"
+            };
+            if (dialog.ShowDialog() != true) return;
+            SlmModelPath = dialog.FileName;
+        });
         SaveCommand = new AsyncRelayCommand(SaveAsync);
         ExportDiagnosticsCommand = new AsyncRelayCommand(ExportDiagnosticsAsync);
     }
@@ -38,6 +55,8 @@ public sealed class SettingsViewModel : ObservableObject
     public ObservableCollection<WatchFolderItemViewModel> WatchFolders { get; } = new();
     public RelayCommand AddFolderCommand { get; }
     public RelayCommand RemoveFolderCommand { get; }
+    public RelayCommand BrowseFolderCommand { get; }
+    public RelayCommand BrowseSlmModelCommand { get; }
     public AsyncRelayCommand SaveCommand { get; }
     public AsyncRelayCommand ExportDiagnosticsCommand { get; }
 
